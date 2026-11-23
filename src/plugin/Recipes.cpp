@@ -448,7 +448,7 @@ namespace Recipes
 			}
 		}
 		if (all.empty()) {
-			RE::DebugNotification("Hearthcooking: no recipes found");
+			RE::SendHUDMessage::ShowHUDMessage("Hearthcooking: no recipes found");
 			return;
 		}
 		std::mt19937 rng{ std::random_device{}() };
@@ -470,7 +470,7 @@ namespace Recipes
 			for (const auto& [f, c] : give) {
 				pc->AddObjectToContainer(f, nullptr, c, nullptr);
 			}
-			RE::DebugNotification(fmt::format("Hearthcooking debug: {} random ingredients added", n).c_str());
+			RE::SendHUDMessage::ShowHUDMessage(fmt::format("Hearthcooking debug: {} random ingredients added", n).c_str());
 		});
 	}
 
