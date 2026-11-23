@@ -12,6 +12,7 @@
 #include "Ui.h"
 
 #include "../sim/Kitchen.h"
+#include "../sim/Timing.h"
 
 namespace Cook
 {
@@ -381,6 +382,93 @@ namespace Cook
 		bool   g_served = false;
 		double g_serveAt = 0;
 		hc::Result g_result;
+
+		// ---- our version (DISENO.md): the dish's timer, the station's firewood
+		hc::timing::Piece g_timer;
+		int    g_stationLogs = 0;   // the station's own logs left (2..5 at the start)
+		int    g_invLogsUsed = 0;   // firewood from the player's pack put on the fire (taken when the dish is served)
+
+		RE::TESBoundObject* Firewood() { return RE::TESForm::LookupByID<RE::TESBoundObject>(0x0006F993); }  // Skyrim.esm Firewood01
+
+		int PackLogs()
+		{
+			auto* pc = RE::PlayerCharacter::GetSingleton();
+			auto* wood = Firewood();
+			if (!pc || !wood) {
+				return 0;
+			}
+			const auto counts = pc->GetInventoryCounts([wood](RE::TESBoundObject& a_o) { return &a_o == wood; });
+			const auto it = counts.find(wood);
+			return it == counts.end() ? 0 : (std::max)(0, it->second);
+		}
+
+		int LogsLeft() { return g_stationLogs + (std::max)(0, PackLogs() - g_invLogsUsed); }
+
+		void UseLog()
+		{
+			if (g_stationLogs > 0) {
+				--g_stationLogs;
+			} else {
+				++g_invLogsUsed;
+			}
+		}
+
+		void TakePackLogs()
+		{
+			auto* pc = RE::PlayerCharacter::GetSingleton();
+			auto* wood = Firewood();
+			const int n = (std::min)(g_invLogsUsed, PackLogs());
+			if (pc && wood && n > 0) {
+				pc->RemoveItem(wood, n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+			}
+			g_invLogsUsed = 0;
+		}
+
+		bool HasWord(const std::string& a_key, std::initializer_list<const char*> a_words)
+		{
+			for (const char* w : a_words) {
+				if (a_key.find(w) != std::string::npos) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// The dish's time with one log burning (DISENO.md section 3)
+		double BaseTime(const Recipes::Recipe& a_r)
+		{
+			switch (a_r.flow) {
+			case hc::Flow::Spit:
+				return 15.0;
+			case hc::Flow::Oven:
+				if (a_r.pie) {
+					return 22.0;
+				}
+				return HasWord(a_r.key, { "sweet", "roll", "cake", "tart", "cookie", "muffin", "bun" }) ? 12.0 : 17.0;
+			default:
+				return 20.0;
+			}
+		}
+
+		// How done the dish looks for the timer: the station's own scale, raw .. its gold window (lo..hi) at T..T+4
+		// .. as burnt as the station shows it at T+7, and on past that
+		double TimerLook(double a_lo, double a_hi, double a_burnt)
+		{
+			const double c = g_timer.cooked, T = g_timer.time;
+			if (T <= 0.0) {
+				return 0.0;
+			}
+			if (c <= T) {
+				return a_lo * c / T;
+			}
+			const double over = c - T;
+			if (over <= hc::timing::kHeartyEnd) {
+				return a_lo + (a_hi - a_lo) * over / hc::timing::kHeartyEnd;
+			}
+			const double span = hc::timing::kPlainEnd - hc::timing::kHeartyEnd;
+			return a_hi + (a_burnt - a_hi) * (over - hc::timing::kHeartyEnd) / span;
+		}
+
 		RE::TESBoundObject* g_given = nullptr;
 		std::string g_givenName;
 		bool   g_burntLook = false;
@@ -1445,8 +1533,13 @@ namespace Cook
 			g_chunks.Clear();
 			g_pieces.clear();
 			BuildKitchen(a_r->oven, g_flow);
-			g_fire = hc::Fire(a_r->oven ? 9.0 : 5.0);
+			g_fire = hc::Fire(a_r->oven ? 9.0 : 5.0, hc::timing::kLogBurn);
 			g_fire.Light(0);  // every fire starts cold: firewood goes in (the pot's once everything's in it)
+			g_timer = {};
+			g_timer.time = BaseTime(*a_r);
+			g_stationLogs = hc::timing::StartLogs(static_cast<unsigned>(std::rand()) ^ static_cast<unsigned>(g_clock * 1000.0));
+			g_invLogsUsed = 0;
+			spdlog::info("{}: {:.0f} s with one log; the station has {} logs, the pack {}", a_r->name, g_timer.time, g_stationLogs, PackLogs());
 			g_pot.reset();
 			g_spit.reset();
 			g_oven.reset();
@@ -1594,6 +1687,26 @@ namespace Cook
 				g_oven->Unload();
 				g_result = g_oven->Score();
 			}
+			// our version: the old lines stay as advice, the tier is the second it came off the fire
+			g_timer.TakeOut();
+			{
+				const double over = g_timer.cooked - g_timer.time;
+				const char*  v = g_timer.raw ? "Taken off raw" :
+				                 g_timer.tier == hc::Tier::Masterwork ? "On the very second" :
+				                 g_timer.tier == hc::Tier::Hearty ? "A moment late" :
+				                 g_timer.tier == hc::Tier::Plain ? "Left a while" : "Left far too long";
+				const double sc = g_timer.raw ? 0.0 : over < hc::timing::kMasterWin ? 1.0 : (std::max)(0.0, 1.0 - over / hc::timing::kPlainEnd);
+				hc::Result r;
+				r.lines[r.count++] = { "The timing", v, sc };
+				for (int i = 0; i < g_result.count && r.count < 8; ++i) {
+					r.lines[r.count++] = g_result.lines[i];
+				}
+				r.quality = sc;
+				r.tier = g_timer.tier;
+				r.burntWhy = g_timer.raw ? "It came off the fire raw" : "It stayed on past its time";
+				g_result = r;
+			}
+			TakePackLogs();
 			Recipes::Consume(*g_recipe);
 			g_given = Recipes::Give(*g_recipe, g_result.tier);
 			g_givenName = g_given && g_given->GetName() ? g_given->GetName() : g_recipe->name;
@@ -2267,6 +2380,10 @@ namespace Cook
 			// logs: from the pile
 			for (int k = 0; k < 3; ++k) {
 				if (NearScreen({ L::kPileX, L::kPileY + (k - 1) * 1.6, 1.5 }, mx, my, 3.0, 22.0f)) {
+					if (g_recipe && LogsLeft() <= 0) {
+						Toast("No firewood left");
+						return;
+					}
 					g_hold = Hold::Log;
 					return;
 				}
@@ -2812,6 +2929,9 @@ namespace Cook
 					(!AllInPot() || (g_recipe && g_recipe->salted && g_pot && g_pot->Seasoning().amount < 0.7))) {
 					Toast(!AllInPot() ? "Everything into the pot first, then the firewood under it" : "Salt it first, then the firewood under it");
 				} else if (OverFire(mx, my) && g_fire.AddLog()) {
+					if (g_recipe) {
+						UseLog();
+					}
 					Audio::Take("log_", 0.8f);
 					static const float spark[4] = { 1.0f, 0.55f, 0.15f, 1.0f };
 					Spray(FireCenter() + Vec3{ 0, 0, 1.0 }, 18, spark, 4.0, 12.0, 0.12f, false, Render3D::Sprite::Kind::Ember, 1.2);
@@ -3202,6 +3322,9 @@ namespace Cook
 					g_pot->AddPieces(before, after - before);
 				}
 				g_pot->Step(dt * kPotSpeed, g_fire.Heat(), after + g_tossedIn > 0);
+				g_timer.in = after + g_tossedIn > 0;
+				g_timer.Step(dt, hc::timing::Rate(g_fire.Logs()));
+				g_pot->SetCooked(TimerLook(0.92, 1.3, 1.9));
 				g_chunks.Cook(dt * kPotSpeed * 0.02 * Clamp(g_pot->Temp() - 0.3, 0.0, 1.0));
 				const double t = g_pot->Temp();
 				// the real recording only: it murmurs as the pot warms and comes up to a full boil
@@ -3210,6 +3333,11 @@ namespace Cook
 			if (g_flow == hc::Flow::Spit && g_spit) {
 				const int m = Mounted();
 				g_spit->Step(dt * kSpitSpeed, g_fire.Heat(), m > 0);
+				g_timer.in = m > 0;
+				g_timer.Step(dt, hc::timing::Rate(g_fire.Logs()));
+				if (g_timer.cooked > 0.0) {
+					g_spit->SetMean(TimerLook(0.9, 1.3, 1.7));
+				}
 			}
 			if (g_flow == hc::Flow::Oven && g_oven) {
 				g_door += Clamp(g_doorWant - g_door, -dt * 3.0, dt * 3.0);
@@ -3221,6 +3349,11 @@ namespace Cook
 					g_doorReopened = g_doorReopened || g_oven->Brown() >= 0.5 || g_oven->Out();
 				}
 				g_oven->Step(dt * kOvenSpeed, g_fire.Heat());
+				g_timer.in = g_oven->InOven();
+				g_timer.Step(dt, hc::timing::Rate(g_fire.Logs()));
+				if (g_timer.in || g_oven->Out()) {
+					g_oven->SetBrown(TimerLook(0.85, 1.2, 1.6));
+				}
 				for (int k = 0; k < 4; ++k) {
 					g_fold[k] += Clamp(g_foldWant[k] - g_fold[k], -dt * 3.0, dt * 2.2);
 				}
@@ -5418,35 +5551,65 @@ namespace Cook
 			Text(dl, F.sans, ImVec2(W * 0.5f - tw * 0.5f, y + (S(25) - F.sans->FontSize) * 0.5f), kWhite, hint, 0.07f, 0.9f);
 		}
 
-		// How done it is: raw, nearly, ready (the window that grades best), over; the bowl or plate lights up when it's ready
+		// Our version (DISENO.md): no doneness bar. An hourglass and a counter over the dish, the seconds left at the fire
+		// as it burns now; the bowl or plate lights up in the masterwork second. And the firewood left by the pile.
+		void Hourglass(ImDrawList* dl, ImVec2 c, float h, double a_left, ImU32 a_frame, ImU32 a_sand)
+		{
+			const float w = h * 0.55f, hh = h * 0.5f, neck = h * 0.06f;
+			// frame: the two caps and the posts
+			dl->AddRectFilled(ImVec2(c.x - w * 0.62f, c.y - hh - S(4)), ImVec2(c.x + w * 0.62f, c.y - hh), a_frame, S(2));
+			dl->AddRectFilled(ImVec2(c.x - w * 0.62f, c.y + hh), ImVec2(c.x + w * 0.62f, c.y + hh + S(4)), a_frame, S(2));
+			dl->AddLine(ImVec2(c.x - w * 0.56f, c.y - hh), ImVec2(c.x - w * 0.56f, c.y + hh), a_frame, S(2));
+			dl->AddLine(ImVec2(c.x + w * 0.56f, c.y - hh), ImVec2(c.x + w * 0.56f, c.y + hh), a_frame, S(2));
+			// the glass
+			const ImU32 glass = IM_COL32(220, 225, 230, 70);
+			dl->AddTriangle(ImVec2(c.x - w * 0.45f, c.y - hh), ImVec2(c.x + w * 0.45f, c.y - hh), ImVec2(c.x, c.y - neck), glass, S(1.5f));
+			dl->AddTriangle(ImVec2(c.x - w * 0.45f, c.y + hh), ImVec2(c.x + w * 0.45f, c.y + hh), ImVec2(c.x, c.y + neck), glass, S(1.5f));
+			// the sand: the top empties as the dish nears its time, the bottom fills
+			const float k = static_cast<float>(Clamp(a_left, 0.0, 1.0));  // share still on top
+			if (k > 0.0f) {
+				const float top = c.y - neck - (hh - neck) * k;
+				const float half = w * 0.45f * k;
+				dl->AddTriangleFilled(ImVec2(c.x - half, top), ImVec2(c.x + half, top), ImVec2(c.x, c.y - neck), a_sand);
+				dl->AddLine(ImVec2(c.x, c.y - neck), ImVec2(c.x, c.y + hh), a_sand, S(1));
+			}
+			const float f = 1.0f - k;
+			if (f > 0.0f) {
+				const float top = c.y + hh - (hh - neck) * f;
+				const float half = w * 0.45f * f;
+				dl->AddTriangleFilled(ImVec2(c.x - half * 0.9f, c.y + hh), ImVec2(c.x + half * 0.9f, c.y + hh), ImVec2(c.x, top), a_sand);
+			}
+		}
+
 		void Meter()
 		{
-			double v = -1.0, lo = 0.9, hi = 1.3, top = 2.0;
-			Vec3   at;
+			auto* dl = ImGui::GetForegroundDrawList();
+			// the firewood left, by the pile
+			if (g_recipe && !g_served) {
+				float px = 0, py = 0;
+				if (Scene::Project({ L::kPileX, L::kPileY, 4.0 }, px, py)) {
+					const int pack = (std::max)(0, PackLogs() - g_invLogsUsed);
+					const auto t = pack > 0 ? fmt::format("Firewood {} (+{} in your pack)", g_stationLogs, pack) : fmt::format("Firewood {}", g_stationLogs);
+					TextC(dl, F.sans, px, py - S(40), LogsLeft() > 0 ? kWhite : IM_COL32(230, 150, 130, 255), t, 0.05f, 0.9f);
+				}
+			}
+			Vec3        at;
 			const char* warn = nullptr;
+			bool        show = false;
 			if (g_flow == hc::Flow::Pot && g_pot && g_chunks.CountIn(hc::Chunks::State::Pot) + g_tossedIn > 0) {
-				v = g_pot->Cooked(), lo = 0.92, hi = 1.3, top = 2.0;
+				show = true;
 				at = { L::kPotX, L::kPotY + L::kPotR + 1.5, L::kPotRim + 3.0 };
 				if (g_pot->Burn() > 0.25) {
 					warn = "Catching on the bottom: stir!";
 				}
-			} else if (g_flow == hc::Flow::Spit && g_spit) {
-				bool on = false;
-				for (const auto& u : g_units) {
-					on |= u.at == Unit::At::Spit;
-				}
-				if (on) {
-					v = g_spit->Mean(), lo = 0.9, hi = 1.3, top = 1.9;
-					at = { L::kFireX, L::kFireY + 4.0, L::kSpitZ + 7.0 };
-					if (g_spit->Spread() > 0.25 && g_hold != Hold::Crank) {  // (not while it's being turned)
-						warn = "One side's browner: keep turning";
-					}
-				}
+			} else if (g_flow == hc::Flow::Spit && g_spit && (Mounted() > 0 || g_timer.cooked > 0.0)) {
+				show = Mounted() > 0;
+				at = { L::kFireX, L::kFireY + 4.0, L::kSpitZ + 7.0 };
 			} else if (g_flow == hc::Flow::Oven && g_oven && g_oven->InOven()) {
-				v = g_oven->Brown(), lo = 0.85, hi = 1.2, top = 1.8;
-				at = { L::kOvenX, L::kOvenY + 5.0, OvenFloor() + 17.0 };  // clear over the dome
+				show = true;
+				at = { L::kOvenX, L::kOvenY + 5.0, OvenFloor() + 17.0 };
 			}
-			if (v < 0.0 || g_served) {
+			if (!show || g_served) {
 				return;
 			}
 			float sx = 0, sy = 0;
@@ -5456,27 +5619,38 @@ namespace Cook
 			if (g_flow == hc::Flow::Oven) {
 				float mx0 = 0, my0 = 0;
 				if (Scene::Project(MouthAt(), mx0, my0)) {
-					sx = mx0;  // (centred over the oven, as its mouth is: the point over the dome sat off to one side in the view)
+					sx = mx0;
 				}
 			}
-			auto*       dl = ImGui::GetForegroundDrawList();
-			const float w = S(240), h = S(12);
-			const float x0 = sx - w * 0.5f, y0 = (std::max)(S(90), sy - S(40));  // never up under the screen's top
-			auto        X = [&](double a_v) { return x0 + w * static_cast<float>(Clamp(a_v / top, 0.0, 1.0)); };
-			dl->AddRectFilled(ImVec2(x0 - S(10), y0 - S(30)), ImVec2(x0 + w + S(10), y0 + h + S(10)), IM_COL32(0, 0, 0, 120), S(6));
-			dl->AddRectFilled(ImVec2(x0, y0), ImVec2(X(lo), y0 + h), IM_COL32(120, 110, 95, 200), S(3), ImDrawFlags_RoundCornersLeft);
-			dl->AddRectFilled(ImVec2(X(lo), y0), ImVec2(X(hi), y0 + h), IM_COL32(205, 168, 72, 235));
-			dl->AddRectFilled(ImVec2(X(hi), y0), ImVec2(x0 + w, y0 + h), IM_COL32(120, 52, 34, 210), S(3), ImDrawFlags_RoundCornersRight);
-			dl->AddRectFilled(ImVec2(x0, y0), ImVec2(X(v), y0 + h), IM_COL32(255, 255, 255, 45), S(3));
-			const float mx = X(v);
-			dl->AddTriangleFilled(ImVec2(mx - S(7), y0 - S(9)), ImVec2(mx + S(7), y0 - S(9)), ImVec2(mx, y0 + S(1)), IM_COL32(250, 240, 220, 250));
-			dl->AddLine(ImVec2(mx, y0), ImVec2(mx, y0 + h), IM_COL32(250, 240, 220, 250), S(2));
-			const bool  ready = v >= lo && v <= hi;
-			const char* word = v < lo * 0.65 ? "Raw" : v < lo ? "Nearly there" : v <= hi ? "Ready" : "Overdone";
-			const std::string label = warn ? fmt::format("{} - {}", word, warn) : std::string(word);
-			Text(dl, F.sans, ImVec2(x0, y0 - S(28)), ready ? IM_COL32(255, 220, 130, 255) : kWhite, label, 0.05f, 0.95f);
-			// where it goes, glowing once it's ready
-			if (ready || g_hold == Hold::LadleOut || g_hold == Hold::Meat || g_hold == Hold::Bread) {
+			const double rate = hc::timing::Rate(g_fire.Logs());
+			const double left = g_timer.Remaining();  // cooking seconds to its time (negative: past it)
+			bool         raw = false;
+			const hc::Tier now = g_timer.TierNow(raw);
+			const bool   master = now == hc::Tier::Masterwork;
+			const float  y0 = (std::max)(S(100), sy - S(40));
+			// the plate
+			const float bw = S(170), bh = S(64);
+			dl->AddRectFilled(ImVec2(sx - bw * 0.5f, y0 - bh * 0.5f), ImVec2(sx + bw * 0.5f, y0 + bh * 0.5f), IM_COL32(12, 10, 8, 170), S(6));
+			dl->AddRect(ImVec2(sx - bw * 0.5f, y0 - bh * 0.5f), ImVec2(sx + bw * 0.5f, y0 + bh * 0.5f), IM_COL32(170, 140, 90, 150), S(6), 0, S(1.2f));
+			const ImU32 sand = master ? IM_COL32(255, 214, 120, 255) : (left < 0.0 ? IM_COL32(200, 90, 60, 255) : IM_COL32(214, 180, 120, 240));
+			Hourglass(dl, ImVec2(sx - bw * 0.5f + S(28), y0), bh - S(18), g_timer.time > 0.0 ? left / g_timer.time : 0.0, IM_COL32(150, 112, 70, 255), sand);
+			// the counter: real seconds at the fire as it burns now
+			std::string count;
+			ImU32       col = kWhite;
+			if (left > 0.0) {
+				count = rate > 0.0 ? fmt::format("{:.1f}", left / rate) : fmt::format("{:.1f}", left);
+			} else {
+				count = fmt::format("+{:.1f}", -left);
+				col = master ? IM_COL32(255, 220, 130, 255) : now == hc::Tier::Hearty ? kGold : now == hc::Tier::Plain ? IM_COL32(220, 170, 120, 255) : IM_COL32(230, 110, 90, 255);
+			}
+			Text(dl, F.title, ImVec2(sx - bw * 0.5f + S(56), y0 - F.title->FontSize * 0.5f), col, count, 0.02f, 0.9f);
+			// under it: what the fire is doing
+			const char* line = warn ? warn : rate <= 0.0 ? "The fire is out: it isn't cooking" : nullptr;
+			if (line) {
+				TextC(dl, F.sans, sx, y0 + bh * 0.5f + S(6), IM_COL32(240, 170, 140, 255), line, 0.05f, 0.9f);
+			}
+			// where it goes, glowing in the masterwork second
+			if (master || g_hold == Hold::LadleOut || g_hold == Hold::Meat || g_hold == Hold::Bread) {
 				float bx = 0, by = 0;
 				if (Scene::Project({ L::kServeX, L::kServeY, 2.0 }, bx, by)) {
 					const float p = 0.5f + 0.5f * static_cast<float>(std::sin(g_clock * 4.0));
@@ -5580,7 +5754,7 @@ namespace Cook
 			if (g_flow == hc::Flow::Pot) {
 				lines.push_back("Drag ingredients onto the board and click to chop across them; right-click (or R) turns the knife to cut along them. Both ways makes dice: small and even scores best.");
 				lines.push_back("Grab the board by its left end and drag right to tip it into the pot. Line it up with the pot first.");
-				lines.push_back("Hold the ladle in the pot and stir round. When the meter says it's ready, drag the ladle out of the pot and let go over the bowl to serve.");
+				lines.push_back("Hold the ladle in the pot and stir round. When the counter reaches zero, drag the ladle out of the pot and let go over the bowl to serve.");
 			} else if (g_flow == hc::Flow::Spit) {
 				lines.push_back("Drag the meat onto the spit. Hold the crank's handle and turn it round so every side faces the fire.");
 				lines.push_back("Drag the roast onto the plate when it's brown all over.");
@@ -5592,7 +5766,7 @@ namespace Cook
 				}
 				lines.push_back("Open the door (drag it left). Drag the peel under the dough, carry it into the mouth, shut the door. Peek, but each peek lets the heat out.");
 			}
-			lines.push_back("The meter shows how done it is; there's no gauge for the heat: watch the flames. Logs from the pile make it hotter; once in, they stay in, so don't overdo it.");
+			lines.push_back("The hourglass and its counter show the seconds left. Take it off in the very second it reaches zero for a masterwork; every second after makes it worse, and past seven it burns. Each log burns 15 seconds; while one burns it cooks, more logs cook a little faster. The station's firewood runs out, then your own pack's.");
 			float h = S(80);
 			for (const auto& l : lines) {
 				h += F.sans->CalcTextSizeA(F.sans->FontSize, FLT_MAX, w - S(64), l.c_str()).y + S(10);
@@ -5651,6 +5825,12 @@ namespace Cook
 			}
 			if (lab == "All the way round") {
 				return "Give the crank a quarter turn every few seconds, so no side sits too long facing the fire";
+			}
+			if (lab == "The timing") {
+				if (has("raw")) {
+					return "Wait for the hourglass: take it off when the counter reaches zero";
+				}
+				return "Take it off the moment the counter reaches zero: that second is the masterwork";
 			}
 			if (lab == "Done") {
 				if (has("raw") || has("bloody") || has("Not quite") || has("Underdone")) {

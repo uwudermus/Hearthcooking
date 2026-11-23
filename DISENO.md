@@ -85,6 +85,6 @@ tipografía serif, reloj de arena ilustrado. Todo arte propio; nada copiado de o
 ## Fases
 
 1. Núcleo de reglas: fuego por leños, temporizadores y calidades (`src/sim/Timing.*`, con tests).
-2. Integración en el juego: reloj de arena, contador, leña del inventario, quitar la barra.
+2. Integración en el juego: reloj de arena, contador, leña del inventario, quitar la barra. (hecho, falta compilar y probar)
 3. Varios platos: slider, corte de masa, tandas del horno, 4 presas en el asador, servir en la olla.
 4. Interfaz nueva.

@@ -70,8 +70,9 @@ namespace hc
 		static constexpr int    kMaxLogs = 5;
 		static constexpr double kBurnTime = 120.0;
 
-		explicit Fire(double a_lag = 5.0) :
-			_lag(a_lag) {}
+		// a_burn: how long a log burns (our version: 15 s, timing::kLogBurn)
+		explicit Fire(double a_lag = 5.0, double a_burn = kBurnTime) :
+			_lag(a_lag), _burn(a_burn) {}
 
 		void   Light(int a_logs);  // fresh logs, already caught, the heat already there
 		bool   AddLog();           // false if the fire is full
@@ -90,7 +91,7 @@ namespace hc
 		};
 		Log    _log[kMaxLogs]{};
 		int    _count = 0;
-		double _heat = 0.0, _lag;
+		double _heat = 0.0, _lag, _burn;
 	};
 
 	// ------------------------------------------------------------------ the scoring
@@ -256,6 +257,7 @@ namespace hc
 		void   Step(double a_dt, double a_fireHeat, bool a_hasFood);
 		double Temp() const { return _temp; }
 		double Cooked() const { return _cook; }
+		void   SetCooked(double a_c) { _cook = a_c; }  // our version: the timer drives how done it looks
 		double Burn() const { return _burn; }
 		double StirNow() const;            // 0..1, how well it's being stirred right now
 		double Swirl() const { return _swirl; }  // the broth turning (rad/s), for the pieces in it
@@ -292,6 +294,7 @@ namespace hc
 		Salt&  Seasoning() { return _salt; }
 		const HeatLog& Heat() const { return _heat; }
 		Result Score() const;
+		void   SetMean(double a_m);  // our version: the timer drives how done it looks; the sides keep their spread
 
 	private:
 		double  _angle = 0.0;
@@ -334,6 +337,7 @@ namespace hc
 		double Temp() const { return _temp; }
 		double Rise() const { return _rise; }
 		double Brown() const { return _brown; }
+		void   SetBrown(double a_b) { _brown = a_b; _rise = m::Min(1.15, m::Max(_rise, a_b * 1.1)); }  // our version
 		int    Peeks() const { return _peeks; }
 		Salt&  Seasoning() { return _salt; }
 		const HeatLog& Heat() const { return _heat; }

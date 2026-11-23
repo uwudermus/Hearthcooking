@@ -113,7 +113,7 @@ namespace hc
 	{
 		for (int i = 0; i < _count;) {
 			_log[i].age += a_dt;
-			_log[i].fuel -= a_dt / kBurnTime;
+			_log[i].fuel -= a_dt / _burn;
 			if (_log[i].fuel <= 0.0) {
 				_log[i] = _log[--_count];  // burnt out
 				continue;
@@ -737,6 +737,14 @@ namespace hc
 			v += (b - mean) * (b - mean);
 		}
 		return m::Sqrt(v / kBands);
+	}
+
+	void Spit::SetMean(double a_m)
+	{
+		const double d = a_m - Mean();
+		for (double& b : _band) {
+			b = m::Max(0.0, b + d);
+		}
 	}
 
 	int Spit::Charred() const
