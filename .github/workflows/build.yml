@@ -148,7 +148,7 @@ jobs:
           Copy-Item assets/download/README.txt "$p/"
 
       - name: Publish package to dist branch
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/nuestra-version'
         shell: pwsh
         run: |
           Copy-Item -Recurse package $env:RUNNER_TEMP/dist-out
