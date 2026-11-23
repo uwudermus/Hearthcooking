@@ -436,6 +436,44 @@ namespace Recipes
 		return out;
 	}
 
+	void DebugGiveRandom(int a_kinds, int a_most)
+	{
+		// every ingredient any cooking recipe asks for, once each
+		std::vector<std::pair<RE::TESBoundObject*, std::string>> all;
+		for (const auto& r : g_recipes) {
+			for (const auto& in : r->ings) {
+				if (in.form && std::none_of(all.begin(), all.end(), [&](const auto& a) { return a.first == in.form; })) {
+					all.emplace_back(in.form, in.name);
+				}
+			}
+		}
+		if (all.empty()) {
+			RE::DebugNotification("Hearthcooking: no recipes found");
+			return;
+		}
+		std::mt19937 rng{ std::random_device{}() };
+		std::shuffle(all.begin(), all.end(), rng);
+		std::uniform_int_distribution<int> amount(1, (std::max)(1, a_most));
+		const int n = (std::min)(a_kinds, static_cast<int>(all.size()));
+		std::vector<std::pair<RE::TESBoundObject*, int>> give;
+		for (int i = 0; i < n; ++i) {
+			const int c = amount(rng);
+			give.emplace_back(all[i].first, c);
+			spdlog::info("Debug: gave {} x{}", all[i].second, c);
+		}
+		// on the game's own thread (the settings page runs on the render thread)
+		SKSE::GetTaskInterface()->AddTask([give, n] {
+			auto* pc = RE::PlayerCharacter::GetSingleton();
+			if (!pc) {
+				return;
+			}
+			for (const auto& [f, c] : give) {
+				pc->AddObjectToContainer(f, nullptr, c, nullptr);
+			}
+			RE::DebugNotification(fmt::format("Hearthcooking debug: {} random ingredients added", n).c_str());
+		});
+	}
+
 	std::vector<const Recipe*> ForStation(bool a_oven)
 	{
 		std::lock_guard            lk(g_mtx);

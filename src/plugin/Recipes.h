@@ -63,6 +63,9 @@ namespace Recipes
 	RE::TESBoundObject* Give(const Recipe& a_r, hc::Tier a_tier);
 	hc::Tier Best(const Recipe& a_r, bool& a_any);  // the best you've made it
 
+	// Debug (our version): a_kinds different cooking ingredients picked at random from every recipe, 1..a_most of each
+	void DebugGiveRandom(int a_kinds, int a_most);
+
 	bool IsBurnt(RE::FormID a_form);  // one of our Burnt dishes (eating it costs some stamina)
 	void InstallEatWatch();
 

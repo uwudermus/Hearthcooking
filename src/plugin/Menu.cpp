@@ -5,6 +5,7 @@
 #include "Menu.h"
 #include "Config.h"
 #include "Kit.h"
+#include "Recipes.h"
 
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #include "SKSEMenuFramework.h"
@@ -101,6 +102,11 @@ namespace Menu
 				}
 			}
 			Changed(UI::Checkbox("Debug: mark what the mouse can grab", &v.debugOverlay));
+			UI::SeparatorText("Debug (testing)");
+			if (UI::Button("Give 20 random ingredients")) {
+				Recipes::DebugGiveRandom(20, 10);
+			}
+			Hint("20 different cooking ingredients picked at random, 1 to 10 of each. The list is in Hearthcooking.log.");
 			UI::Spacing();
 			UI::Separator();
 			if (UI::Button("Save to Hearthcooking.ini")) {
