@@ -20,7 +20,7 @@ add_commonlibsse_plugin(${PROJECT_NAME}
     USE_ADDRESS_LIBRARY
     SOURCES src/plugin/main.cpp src/plugin/Config.cpp src/plugin/Overlay.cpp src/plugin/Scene.cpp src/plugin/Cook.cpp src/plugin/Recipes.cpp src/plugin/Kit.cpp
             src/plugin/Audio.cpp src/plugin/Menu.cpp src/plugin/Render3D.cpp src/plugin/Ui.cpp
-            src/sim/Kitchen.cpp)
+            src/sim/Kitchen.cpp src/sim/Timing.cpp)
 
 target_include_directories(${PROJECT_NAME} PRIVATE src/plugin extern/SKSEMenuFramework)
 target_precompile_headers(${PROJECT_NAME} PRIVATE src/plugin/PCH.h)
@@ -31,5 +31,5 @@ if (MSVC)
     target_compile_options(${PROJECT_NAME} PRIVATE /utf-8 /permissive- /Zc:preprocessor)
     target_link_options(${PROJECT_NAME} PRIVATE "$<$<CONFIG:Release>:/DEBUG:FULL;/OPT:REF;/OPT:ICF>")
     # the kitchen's rules are plain C++ with no PCH of their own
-    set_source_files_properties(src/sim/Kitchen.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_source_files_properties(src/sim/Kitchen.cpp src/sim/Timing.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()

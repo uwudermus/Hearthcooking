@@ -3,6 +3,7 @@
 #include "Recipes.h"
 
 #include "EspIds.h"
+#include "../sim/Timing.h"
 
 namespace Recipes
 {
@@ -101,9 +102,11 @@ namespace Recipes
 			return origin;
 		}
 
-		float ValueMult(hc::Tier t) { return t == hc::Tier::Burnt ? 0.25f : t == hc::Tier::Hearty ? 1.5f : t == hc::Tier::Masterwork ? 2.5f : 1.0f; }
-		float MagMult(hc::Tier t) { return t == hc::Tier::Burnt ? 0.5f : t == hc::Tier::Hearty ? 1.5f : t == hc::Tier::Masterwork ? 2.0f : 1.0f; }
-		float DurMult(hc::Tier t) { return t == hc::Tier::Burnt ? 0.5f : t == hc::Tier::Hearty ? 1.5f : t == hc::Tier::Masterwork ? 2.0f : 1.0f; }
+		// The qualities' multipliers live with the rules (src/sim/Timing.cpp, DISENO.md): masterwork 3.5x strength and value,
+		// 2.5x duration; good 2x; burnt or raw half
+		float ValueMult(hc::Tier t) { return static_cast<float>(hc::timing::Multipliers(t).value); }
+		float MagMult(hc::Tier t) { return static_cast<float>(hc::timing::Multipliers(t).magnitude); }
+		float DurMult(hc::Tier t) { return static_cast<float>(hc::timing::Multipliers(t).duration); }
 
 		// Makes slot a_k a copy of the game's dish at a tier
 		bool Bind(int a_k, RE::AlchemyItem* a_base, hc::Tier a_tier)
