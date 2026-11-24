@@ -106,7 +106,7 @@ namespace Menu
 			if (UI::Button("Give 20 random ingredients")) {
 				Recipes::DebugGiveRandom(20, 10);
 			}
-			Hint("20 different cooking ingredients picked at random, 1 to 10 of each. The list is in Hearthcooking.log.");
+			Hint("20 different cooking ingredients at random (baking, vegetables, meat and the rest, in turn), 1 to 10 of each. The list is in Hearthcooking.log.");
 			UI::Spacing();
 			UI::Separator();
 			if (UI::Button("Save to Hearthcooking.ini")) {

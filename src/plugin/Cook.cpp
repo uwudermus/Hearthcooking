@@ -149,6 +149,7 @@ namespace Cook
 			bool                      bulb = false;       // a head of garlic: broken into its cloves (a knock of the knife) before it's diced
 			hc::timing::Piece         timer;              // our version: a meat on the spit cooks to its own time
 			int                       dish = 0;           // which portion it's for
+			int                       servedSlot = -1;    // the plate it went onto
 		};
 
 		// A piece: the ingredient's own mesh cut to a box (x along its length, y across, z up; about its middle, at the
@@ -185,6 +186,7 @@ namespace Cook
 			Scene::Id fireLogs[hc::Fire::kMaxLogs]{ -1, -1, -1, -1, -1 };
 			Scene::Id pile[3]{ -1, -1, -1 };
 			std::vector<Scene::Id> butter;  // butter cut into the flour
+			std::vector<Scene::Id> extraServe;  // our version: a bowl or plate per portion after the first
 			std::vector<Scene::Id> crimps, pieRim, galette, leafBits, dumpFolds;  // (a dumpling's folds; a pie's fluted rim, a scallop a pinch; a crostata's eight pleats)
 			std::vector<std::pair<Scene::Id, Vec3>> fill;  // the filling on the pie (disk-local, units)
 			std::array<bool, static_cast<int>(Kit::Role::Count)> game{};  // this one is the game's own mesh (fitted), not ours
@@ -390,6 +392,13 @@ namespace Cook
 		int    g_stationLogs = 0;   // the station's own logs left (2..5 at the start)
 		int    g_invLogsUsed = 0;   // firewood from the player's pack put on the fire (taken when the dish is served)
 		int    g_portions = 1;      // how many dishes at once (the recipe book's slider)
+		struct Slot
+		{
+			int      count = 0;  // what's on it (meats; a ladle of stew)
+			hc::Tier tier = hc::Tier::Masterwork;
+			bool     raw = false;
+		};
+		std::vector<Slot> g_slots;  // a bowl or plate per portion, along the front of the table
 		std::vector<std::pair<hc::Tier, bool>> g_portionTiers;  // each portion as it came off the fire (tier, raw)
 
 		RE::TESBoundObject* Firewood() { return RE::TESForm::LookupByID<RE::TESBoundObject>(0x0006F993); }  // Skyrim.esm Firewood01
@@ -456,6 +465,58 @@ namespace Cook
 
 		// How done the dish looks for the timer: the station's own scale, raw .. its gold window (lo..hi) at T..T+4
 		// .. as burnt as the station shows it at T+7, and on past that
+		int ServeCount() { return g_recipe ? (std::max)(1, g_portions) : 1; }
+
+		// Where portion k's bowl or plate stands: in a row along the front, centred on the game's own place for it
+		Vec3 SlotAt(int a_k)
+		{
+			const int    n = ServeCount();
+			const double gap = g_flow == hc::Flow::Pot ? 8.5 : 10.5;
+			return { L::kServeX + (a_k - (n - 1) * 0.5) * gap, L::kServeY, 0.0 };
+		}
+
+		// How many go on one plate: the spit's meats per dish; a ladle per bowl
+		int PerSlot()
+		{
+			if (g_flow != hc::Flow::Spit) {
+				return 1;
+			}
+			int meats = 0;
+			if (g_recipe) {
+				for (const auto& in : g_recipe->ings) {
+					meats += in.role == Recipes::Role::Meat ? in.count : 0;
+				}
+			}
+			return (std::max)(1, meats);
+		}
+
+		void FillSlot(int a_k, hc::Tier a_t, bool a_raw)
+		{
+			auto& sl = g_slots[a_k];
+			if (sl.count == 0 || a_t < sl.tier || (a_t == sl.tier && a_raw)) {
+				sl.tier = a_t;
+				sl.raw = a_raw;
+			}
+			++sl.count;
+		}
+
+		bool AllServed()
+		{
+			for (const auto& sl : g_slots) {
+				if (sl.count < PerSlot()) {
+					return false;
+				}
+			}
+			return !g_slots.empty();
+		}
+
+		const char* TierWord(hc::Tier a_t, bool a_raw) { return a_raw ? "Raw" : hc::TierName(a_t); }
+		ImU32 TierColour(hc::Tier a_t, bool a_raw)
+		{
+			return a_raw ? IM_COL32(200, 160, 150, 255) : a_t == hc::Tier::Masterwork ? IM_COL32(255, 214, 120, 255) : a_t == hc::Tier::Hearty ? IM_COL32(222, 196, 140, 255) :
+			       a_t == hc::Tier::Plain ? IM_COL32(241, 238, 232, 255) : IM_COL32(230, 110, 90, 255);
+		}
+
 		// How many at once: no more than the ingredients carried; the spit takes 4 meats, the pot 5 bowls; the oven one
 		// for now (its batches come with cutting the dough)
 		int MaxPortions(const Recipes::Recipe& a_r)
@@ -845,7 +906,12 @@ namespace Cook
 					Scene::Hide(P.sauceIn, true);
 				}
 				P.bowl = KitAdd(Kit::Role::Bowl);
-				Settle(P.bowl, Kit::Role::Bowl, { L::kServeX, L::kServeY, 0.0 }, { 7.0, 7.0, 0.0 }, 0.0, false, { L::kServeX, L::kServeY, 0.0 });
+				Settle(P.bowl, Kit::Role::Bowl, SlotAt(0), { 7.0, 7.0, 0.0 }, 0.0, false, SlotAt(0));
+				for (int k = 1; k < ServeCount(); ++k) {
+					const auto id = KitAdd(Kit::Role::Bowl);
+					Settle(id, Kit::Role::Bowl, SlotAt(k), { 7.0, 7.0, 0.0 }, 0.0, false, SlotAt(k));
+					P.extraServe.push_back(id);
+				}
 			}
 			if (a_flow == hc::Flow::Spit) {
 				P.posts = KitAdd(Kit::Role::Spit);
@@ -865,7 +931,12 @@ namespace Cook
 			}
 			if (a_flow != hc::Flow::Pot) {
 				P.plate = KitAdd(Kit::Role::Plate);
-				Settle(P.plate, Kit::Role::Plate, { L::kServeX, L::kServeY, 0.0 }, { 9.4, 9.4, 0.0 }, 0.0, false, { L::kServeX, L::kServeY, 0.0 });
+				Settle(P.plate, Kit::Role::Plate, SlotAt(0), { 9.4, 9.4, 0.0 }, 0.0, false, SlotAt(0));
+				for (int k = 1; a_flow == hc::Flow::Spit && k < ServeCount(); ++k) {
+					const auto id = KitAdd(Kit::Role::Plate);
+					Settle(id, Kit::Role::Plate, SlotAt(k), { 9.4, 9.4, 0.0 }, 0.0, false, SlotAt(k));
+					P.extraServe.push_back(id);
+				}
 			}
 			if (a_oven) {
 				P.ovenDome = KitAdd(Kit::Role::Oven);
@@ -1557,6 +1628,8 @@ namespace Cook
 		{
 			g_recipe = a_r;
 			g_flow = a_r->flow;
+			g_portions = std::clamp(g_portions, 1, MaxPortions(*a_r));
+			g_slots.assign(g_portions, Slot{});
 			g_chunks.Clear();
 			g_pieces.clear();
 			BuildKitchen(a_r->oven, g_flow);
@@ -1717,25 +1790,11 @@ namespace Cook
 				g_result = g_oven->Score();
 			}
 			// our version: each portion's tier is the second it came off the fire; the old lines stay as advice
-			if (g_flow == hc::Flow::Spit) {
-				g_portionTiers.clear();
-				for (int d = 0; d < g_portions; ++d) {
-					hc::Tier t = hc::Tier::Masterwork;
-					bool     raw = false, any = false;
-					for (const auto& u : g_units) {
-						if (u.role != Role::Meat || u.dish != d) {
-							continue;
-						}
-						any = true;
-						const hc::Tier ut = u.timer.out ? u.timer.tier : hc::Tier::Burnt;
-						const bool     ur = u.timer.out ? u.timer.raw : true;
-						if (ut < t || (ut == t && ur)) {
-							t = ut;
-							raw = ur;
-						}
-					}
-					if (any) {
-						g_portionTiers.emplace_back(t, raw);
+			g_portionTiers.clear();
+			if (g_flow != hc::Flow::Oven) {
+				for (const auto& sl : g_slots) {
+					if (sl.count > 0) {
+						g_portionTiers.emplace_back(sl.tier, sl.raw);
 					}
 				}
 			}
@@ -1817,6 +1876,9 @@ namespace Cook
 					Scene::Hide(id, true);
 				}
 			}
+			if (n > 1) {
+				return;  // our version: the portions stay on their plates, the kitchen in view
+			}
 			if (P.bowl >= 0) {
 				Scene::Hide(P.bowl, true);
 			}
@@ -1868,6 +1930,17 @@ namespace Cook
 		}
 
 		bool OverServe(float a_mx, float a_my) { return NearScreen({ L::kServeX, L::kServeY, 1.0 }, a_mx, a_my, 5.0, 40.0f); }
+
+		// The bowl or plate with room under the hand (-1: none)
+		int SlotUnder(float a_mx, float a_my)
+		{
+			for (int k = 0; k < static_cast<int>(g_slots.size()); ++k) {
+				if (g_slots[k].count < PerSlot() && NearScreen(SlotAt(k) + Vec3{ 0, 0, 1.0 }, a_mx, a_my, ServeCount() > 1 ? 4.5 : 5.0, ServeCount() > 1 ? 32.0f : 40.0f)) {
+					return k;
+				}
+			}
+			return -1;
+		}
 
 		Vec3 SpitAxis(double a_x) { return { L::kFireX + a_x, L::kFireY, L::kSpitZ }; }
 		Vec3 CrankGrip()
@@ -3089,16 +3162,15 @@ namespace Cook
 			case Hold::Apples:
 				break;  // (poured as it tipped; else the bowl goes back)
 			case Hold::LadleOut:
-				if (OverServe(mx, my)) {
+				if (const int k = SlotUnder(mx, my); k >= 0) {
 					if (g_chunks.CountIn(hc::Chunks::State::Pot) + g_tossedIn > 0) {
 						Audio::Take("splash_", 0.6f);
 						bool           raw = false;
 						const hc::Tier t = g_timer.TierNow(raw);
-						g_portionTiers.emplace_back(t, raw);
-						if (static_cast<int>(g_portionTiers.size()) >= g_portions) {
+						FillSlot(k, t, raw);
+						if (AllServed()) {
 							Serve();
 						} else {
-							Toast(fmt::format("Bowl {} of {}: {}", g_portionTiers.size(), g_portions, raw ? "Raw" : hc::TierName(t)));
 							Audio::Play({ t == hc::Tier::Burnt ? "burnt" : "done", 0.6f });
 						}
 					} else {
@@ -3146,20 +3218,19 @@ namespace Cook
 				}
 				break;
 			case Hold::Meat:
-				if (OverServe(mx, my) && g_holdUnit >= 0) {
-					auto& u = g_units[g_holdUnit];
+				if (ui >= 0) {
+					const int k = SlotUnder(mx, my);
+					if (k < 0) {
+						break;  // back on the spit
+					}
+					auto& u = g_units[ui];
 					u.timer.TakeOut();
 					u.at = Unit::At::Gone;
-					Scene::Hide(u.prop, true);
-					bool left = false;
-					for (const auto& o : g_units) {
-						left |= o.role == Role::Meat && (o.at == Unit::At::Spit || o.at == Unit::At::Cloth || o.at == Unit::At::Held);
-					}
-					if (!left) {
+					u.servedSlot = k;
+					FillSlot(k, u.timer.tier, u.timer.raw);
+					Audio::Play({ u.timer.tier == hc::Tier::Burnt ? "burnt" : "done", 0.6f });
+					if (AllServed()) {
 						Serve();
-					} else {
-						Toast(fmt::format("{}: {}", u.name, u.timer.raw ? "Raw" : hc::TierName(u.timer.tier)));
-						Audio::Play({ u.timer.tier == hc::Tier::Burnt ? "burnt" : "done", 0.6f });
 					}
 				}
 				break;
@@ -3985,6 +4056,14 @@ namespace Cook
 			for (int i = 0; i < static_cast<int>(g_units.size()); ++i) {
 				auto& u = g_units[i];
 				if (u.prop < 0) {
+					continue;
+				}
+				if (u.servedSlot >= 0) {
+					int nth = 0;
+					for (int j = 0; j < i; ++j) {
+						nth += g_units[j].servedSlot == u.servedSlot;
+					}
+					Lay(u, SlotAt(u.servedSlot) + Vec3{ 0.0, (nth - (PerSlot() - 1) * 0.5) * 2.4, 1.3 }, MeatLen(u), RotZ(0.3));
 					continue;
 				}
 				switch (u.at) {
@@ -5724,37 +5803,9 @@ namespace Cook
 			Text(dl, F.sans, ImVec2(W * 0.5f - tw * 0.5f, y + (S(25) - F.sans->FontSize) * 0.5f), kWhite, hint, 0.07f, 0.9f);
 		}
 
-		// Our version (DISENO.md): no doneness bar. An hourglass and a counter over the dish, the seconds left at the fire
-		// as it burns now; the bowl or plate lights up in the masterwork second. And the firewood left by the pile.
-		void Hourglass(ImDrawList* dl, ImVec2 c, float h, double a_left, ImU32 a_frame, ImU32 a_sand)
-		{
-			const float w = h * 0.55f, hh = h * 0.5f, neck = h * 0.06f;
-			// frame: the two caps and the posts
-			dl->AddRectFilled(ImVec2(c.x - w * 0.62f, c.y - hh - S(4)), ImVec2(c.x + w * 0.62f, c.y - hh), a_frame, S(2));
-			dl->AddRectFilled(ImVec2(c.x - w * 0.62f, c.y + hh), ImVec2(c.x + w * 0.62f, c.y + hh + S(4)), a_frame, S(2));
-			dl->AddLine(ImVec2(c.x - w * 0.56f, c.y - hh), ImVec2(c.x - w * 0.56f, c.y + hh), a_frame, S(2));
-			dl->AddLine(ImVec2(c.x + w * 0.56f, c.y - hh), ImVec2(c.x + w * 0.56f, c.y + hh), a_frame, S(2));
-			// the glass
-			const ImU32 glass = IM_COL32(220, 225, 230, 70);
-			dl->AddTriangle(ImVec2(c.x - w * 0.45f, c.y - hh), ImVec2(c.x + w * 0.45f, c.y - hh), ImVec2(c.x, c.y - neck), glass, S(1.5f));
-			dl->AddTriangle(ImVec2(c.x - w * 0.45f, c.y + hh), ImVec2(c.x + w * 0.45f, c.y + hh), ImVec2(c.x, c.y + neck), glass, S(1.5f));
-			// the sand: the top empties as the dish nears its time, the bottom fills
-			const float k = static_cast<float>(Clamp(a_left, 0.0, 1.0));  // share still on top
-			if (k > 0.0f) {
-				const float top = c.y - neck - (hh - neck) * k;
-				const float half = w * 0.45f * k;
-				dl->AddTriangleFilled(ImVec2(c.x - half, top), ImVec2(c.x + half, top), ImVec2(c.x, c.y - neck), a_sand);
-				dl->AddLine(ImVec2(c.x, c.y - neck), ImVec2(c.x, c.y + hh), a_sand, S(1));
-			}
-			const float f = 1.0f - k;
-			if (f > 0.0f) {
-				const float top = c.y + hh - (hh - neck) * f;
-				const float half = w * 0.45f * f;
-				dl->AddTriangleFilled(ImVec2(c.x - half * 0.9f, c.y + hh), ImVec2(c.x + half * 0.9f, c.y + hh), ImVec2(c.x, top), a_sand);
-			}
-		}
-
-		// The counter's words and colour for a piece at the fire as it burns now
+		// Our version (DISENO.md): a slim vertical bar by each dish, filling as it cooks: grey to its time, then the
+		// masterwork second (bright gold), good (gold), plain (tan) and burnt (red) above; the seconds left beside it.
+		// The words for each portion served stand under its bowl or plate.
 		std::string CounterText(const hc::timing::Piece& a_p, double a_rate, ImU32& a_col)
 		{
 			const double left = a_p.Remaining();
@@ -5764,24 +5815,70 @@ namespace Cook
 				a_col = kWhite;
 				return fmt::format("{:.1f}", a_rate > 0.0 ? left / a_rate : left);
 			}
-			a_col = now == hc::Tier::Masterwork ? IM_COL32(255, 220, 130, 255) : now == hc::Tier::Hearty ? kGold : now == hc::Tier::Plain ? IM_COL32(220, 170, 120, 255) : IM_COL32(230, 110, 90, 255);
+			a_col = TierColour(now, false);
 			return fmt::format("+{:.1f}", -left);
 		}
 
-		// A small hourglass and counter over one meat on the spit
-		void MiniTimer(ImDrawList* dl, float sx, float sy, const hc::timing::Piece& a_p, double a_rate)
+		void TimerBar(ImDrawList* dl, float x, float yBottom, const hc::timing::Piece& a_p, double a_rate)
 		{
-			ImU32       col = kWhite;
-			const auto  text = CounterText(a_p, a_rate, col);
-			bool        raw = false;
-			const bool  master = a_p.TierNow(raw) == hc::Tier::Masterwork;
-			const float bw = S(118), bh = S(46);
-			dl->AddRectFilled(ImVec2(sx - bw * 0.5f, sy - bh * 0.5f), ImVec2(sx + bw * 0.5f, sy + bh * 0.5f), IM_COL32(12, 10, 8, 175), S(5));
-			dl->AddRect(ImVec2(sx - bw * 0.5f, sy - bh * 0.5f), ImVec2(sx + bw * 0.5f, sy + bh * 0.5f), master ? IM_COL32(255, 214, 120, 230) : IM_COL32(170, 140, 90, 150), S(5), 0, S(master ? 2.0f : 1.2f));
-			const double left = a_p.Remaining();
-			const ImU32  sand = master ? IM_COL32(255, 214, 120, 255) : (left < 0.0 ? IM_COL32(200, 90, 60, 255) : IM_COL32(214, 180, 120, 240));
-			Hourglass(dl, ImVec2(sx - bw * 0.5f + S(20), sy), bh - S(14), a_p.time > 0.0 ? left / a_p.time : 0.0, IM_COL32(150, 112, 70, 255), sand);
-			Text(dl, F.titleMid, ImVec2(sx - bw * 0.5f + S(40), sy - F.titleMid->FontSize * 0.5f), col, text, 0.02f, 0.9f);
+			namespace T = hc::timing;
+			const float  w = S(11), h = S(96);
+			const double top = a_p.time + T::kPlainEnd + 1.5;  // the scale, in cooking seconds
+			auto Y = [&](double a_s) { return yBottom - h * static_cast<float>(Clamp(a_s / top, 0.0, 1.0)); };
+			dl->AddRectFilled(ImVec2(x - w * 0.5f - S(2), Y(top) - S(2)), ImVec2(x + w * 0.5f + S(2), yBottom + S(2)), IM_COL32(12, 10, 8, 190), S(3));
+			const struct
+			{
+				double from, to;
+				ImU32  col;
+			} zones[] = {
+				{ 0.0, a_p.time, IM_COL32(95, 90, 82, 220) },
+				{ a_p.time, a_p.time + T::kMasterWin, IM_COL32(255, 214, 120, 255) },
+				{ a_p.time + T::kMasterWin, a_p.time + T::kHeartyEnd, IM_COL32(196, 160, 96, 235) },
+				{ a_p.time + T::kHeartyEnd, a_p.time + T::kPlainEnd, IM_COL32(150, 112, 78, 230) },
+				{ a_p.time + T::kPlainEnd, top, IM_COL32(150, 52, 38, 235) },
+			};
+			for (const auto& z : zones) {
+				dl->AddRectFilled(ImVec2(x - w * 0.5f, Y(z.to)), ImVec2(x + w * 0.5f, Y(z.from)), z.col);
+			}
+			// how far it's come: the bar below it lit, a marker at it
+			const float my = Y(a_p.cooked);
+			dl->AddRectFilled(ImVec2(x - w * 0.5f, my), ImVec2(x + w * 0.5f, yBottom), IM_COL32(255, 255, 255, 60));
+			dl->AddTriangleFilled(ImVec2(x - w * 0.5f - S(9), my - S(6)), ImVec2(x - w * 0.5f - S(9), my + S(6)), ImVec2(x - w * 0.5f - S(1), my), IM_COL32(250, 240, 220, 255));
+			dl->AddLine(ImVec2(x - w * 0.5f - S(2), my), ImVec2(x + w * 0.5f + S(2), my), IM_COL32(250, 240, 220, 255), S(2));
+			ImU32      col = kWhite;
+			const auto text = CounterText(a_p, a_rate, col);
+			Text(dl, F.sansSemi, ImVec2(x + w * 0.5f + S(7), my - F.sansSemi->FontSize * 0.5f), col, text, 0.02f, 0.9f);
+		}
+
+		void Glowing(ImDrawList* dl, const Vec3& a_at)
+		{
+			float bx = 0, by = 0;
+			if (Scene::Project(a_at + Vec3{ 0, 0, 2.0 }, bx, by)) {
+				const float p = 0.5f + 0.5f * static_cast<float>(std::sin(g_clock * 4.0));
+				const float r = (std::max)(S(26), Scene::PixelsPerUnit(a_at + Vec3{ 0, 0, 2.0 }) * (ServeCount() > 1 ? 4.2f : 5.5f));
+				dl->AddCircle(ImVec2(bx, by), r + S(6) * p, IM_COL32(255, 214, 120, static_cast<int>(120 + 100 * p)), 48, S(3));
+			}
+		}
+
+		// Each portion served: its word under its bowl or plate (the free ones glow while there's something to serve)
+		void SlotWords(ImDrawList* dl, bool a_glowFree)
+		{
+			for (int k = 0; k < static_cast<int>(g_slots.size()); ++k) {
+				const auto& sl = g_slots[k];
+				if (sl.count == 0) {
+					if (a_glowFree) {
+						Glowing(dl, SlotAt(k));
+					}
+					continue;
+				}
+				float sx = 0, sy = 0;
+				if (Scene::Project(SlotAt(k) + Vec3{ 0, -5.5, 0.0 }, sx, sy)) {
+					const auto word = Upper(TierWord(sl.tier, sl.raw));
+					const float w = Measure(F.sansSemi, word, 0.1f) + S(24);
+					dl->AddRectFilled(ImVec2(sx - w * 0.5f, sy - S(2)), ImVec2(sx + w * 0.5f, sy + F.sansSemi->FontSize + S(6)), IM_COL32(12, 10, 8, 185), S(4));
+					TextC(dl, F.sansSemi, sx, sy + S(1), TierColour(sl.tier, sl.raw), word, 0.1f, 0.9f);
+				}
+			}
 		}
 
 		void Meter()
@@ -5793,110 +5890,65 @@ namespace Cook
 				if (Scene::Project({ L::kPileX, L::kPileY, 4.0 }, px, py)) {
 					const int pack = (std::max)(0, PackLogs() - g_invLogsUsed);
 					const auto t = pack > 0 ? fmt::format("Firewood {} (+{} in your pack)", g_stationLogs, pack) : fmt::format("Firewood {}", g_stationLogs);
-					TextC(dl, F.sans, px, py - S(40), LogsLeft() > 0 ? kWhite : IM_COL32(230, 150, 130, 255), t, 0.05f, 0.9f);
+					TextC(dl, F.sansSemi, px, py - S(44), LogsLeft() > 0 ? kWhite : IM_COL32(230, 150, 130, 255), t, 0.05f, 0.9f);
 				}
 			}
-			// the spit: every meat its own clock
-			if (g_flow == hc::Flow::Spit && g_spit && !g_served) {
-				const double rate = hc::timing::Rate(g_fire.Logs());
-				bool         glow = g_hold == Hold::Meat;
+			if (g_served) {
+				return;
+			}
+			const double rate = hc::timing::Rate(g_fire.Logs());
+			const char*  warn = nullptr;
+			bool         glow = false;
+			// the spit: every meat its own bar
+			if (g_flow == hc::Flow::Spit && g_spit) {
+				glow = g_hold == Hold::Meat;
 				for (const auto& u : g_units) {
 					if (u.role != Role::Meat || u.at != Unit::At::Spit) {
 						continue;
 					}
 					float mx0 = 0, my0 = 0;
-					if (Scene::Project(SpitAxis(u.spitX) + Vec3{ 0, 0, 5.0 }, mx0, my0)) {
-						MiniTimer(dl, mx0, my0 - S(34), u.timer, rate);
+					if (Scene::Project(SpitAxis(u.spitX) + Vec3{ 0, 0, 4.0 }, mx0, my0)) {
+						TimerBar(dl, mx0, my0 - S(8), u.timer, rate);
 					}
 					bool raw = false;
 					glow |= u.timer.TierNow(raw) == hc::Tier::Masterwork;
 				}
 				if (Mounted() > 0 && rate <= 0.0) {
-					float fx = 0, fy = 0;
-					if (Scene::Project(FireCenter() + Vec3{ 0, 0, 2.0 }, fx, fy)) {
-						TextC(dl, F.sansSemi, fx, fy + S(30), IM_COL32(240, 170, 140, 255), "The fire is out: it isn't cooking", 0.05f, 0.9f);
-					}
+					warn = "The fire is out: it isn't cooking";
 				}
-				if (glow) {
-					float bx = 0, by = 0;
-					if (Scene::Project({ L::kServeX, L::kServeY, 2.0 }, bx, by)) {
-						const float p = 0.5f + 0.5f * static_cast<float>(std::sin(g_clock * 4.0));
-						const float r = (std::max)(S(30), Scene::PixelsPerUnit({ L::kServeX, L::kServeY, 2.0 }) * 5.5f);
-						dl->AddCircle(ImVec2(bx, by), r + S(6) * p, IM_COL32(255, 214, 120, static_cast<int>(120 + 100 * p)), 48, S(3));
-					}
-				}
-				return;
-			}
-			Vec3        at;
-			const char* warn = nullptr;
-			bool        show = false;
-			if (g_flow == hc::Flow::Pot && g_pot && g_chunks.CountIn(hc::Chunks::State::Pot) + g_tossedIn > 0) {
-				show = true;
-				at = { L::kPotX, L::kPotY + L::kPotR + 1.5, L::kPotRim + 3.0 };
-				if (g_pot->Burn() > 0.25) {
-					warn = "Catching on the bottom: stir!";
-				}
-			} else if (g_flow == hc::Flow::Spit && g_spit && (Mounted() > 0 || g_timer.cooked > 0.0)) {
-				show = Mounted() > 0;
-				at = { L::kFireX, L::kFireY + 4.0, L::kSpitZ + 7.0 };
-			} else if (g_flow == hc::Flow::Oven && g_oven && g_oven->InOven()) {
-				show = true;
-				at = { L::kOvenX, L::kOvenY + 5.0, OvenFloor() + 17.0 };
-			}
-			if (!show || g_served) {
-				return;
-			}
-			float sx = 0, sy = 0;
-			if (!Scene::Project(at, sx, sy)) {
-				return;
-			}
-			if (g_flow == hc::Flow::Oven) {
-				float mx0 = 0, my0 = 0;
-				if (Scene::Project(MouthAt(), mx0, my0)) {
-					sx = mx0;
-				}
-			}
-			const double rate = hc::timing::Rate(g_fire.Logs());
-			const double left = g_timer.Remaining();  // cooking seconds to its time (negative: past it)
-			bool         raw = false;
-			const hc::Tier now = g_timer.TierNow(raw);
-			const bool   master = now == hc::Tier::Masterwork;
-			const float  y0 = (std::max)(S(100), sy - S(40));
-			// the plate
-			const float bw = S(170), bh = S(64);
-			dl->AddRectFilled(ImVec2(sx - bw * 0.5f, y0 - bh * 0.5f), ImVec2(sx + bw * 0.5f, y0 + bh * 0.5f), IM_COL32(12, 10, 8, 170), S(6));
-			dl->AddRect(ImVec2(sx - bw * 0.5f, y0 - bh * 0.5f), ImVec2(sx + bw * 0.5f, y0 + bh * 0.5f), IM_COL32(170, 140, 90, 150), S(6), 0, S(1.2f));
-			const ImU32 sand = master ? IM_COL32(255, 214, 120, 255) : (left < 0.0 ? IM_COL32(200, 90, 60, 255) : IM_COL32(214, 180, 120, 240));
-			Hourglass(dl, ImVec2(sx - bw * 0.5f + S(28), y0), bh - S(18), g_timer.time > 0.0 ? left / g_timer.time : 0.0, IM_COL32(150, 112, 70, 255), sand);
-			// the counter: real seconds at the fire as it burns now
-			std::string count;
-			ImU32       col = kWhite;
-			if (left > 0.0) {
-				count = rate > 0.0 ? fmt::format("{:.1f}", left / rate) : fmt::format("{:.1f}", left);
 			} else {
-				count = fmt::format("+{:.1f}", -left);
-				col = master ? IM_COL32(255, 220, 130, 255) : now == hc::Tier::Hearty ? kGold : now == hc::Tier::Plain ? IM_COL32(220, 170, 120, 255) : IM_COL32(230, 110, 90, 255);
-			}
-			Text(dl, F.title, ImVec2(sx - bw * 0.5f + S(56), y0 - F.title->FontSize * 0.5f), col, count, 0.02f, 0.9f);
-			// under it: what the fire is doing
-			const char* line = warn ? warn : rate <= 0.0 ? "The fire is out: it isn't cooking" : nullptr;
-			float       ly = y0 + bh * 0.5f + S(6);
-			if (g_flow == hc::Flow::Pot && g_portions > 1) {
-				TextC(dl, F.sansSemi, sx, ly, kGold, fmt::format("Bowl {} of {}", g_portionTiers.size() + 1, g_portions), 0.05f, 0.9f);
-				ly += F.sansSemi->FontSize + S(4);
-			}
-			if (line) {
-				TextC(dl, F.sansSemi, sx, ly, IM_COL32(240, 170, 140, 255), line, 0.05f, 0.9f);
-			}
-			// where it goes, glowing in the masterwork second
-			if (master || g_hold == Hold::LadleOut || g_hold == Hold::Meat || g_hold == Hold::Bread) {
-				float bx = 0, by = 0;
-				if (Scene::Project({ L::kServeX, L::kServeY, 2.0 }, bx, by)) {
-					const float p = 0.5f + 0.5f * static_cast<float>(std::sin(g_clock * 4.0));
-					const float r = (std::max)(S(30), Scene::PixelsPerUnit({ L::kServeX, L::kServeY, 2.0 }) * 5.5f);
-					dl->AddCircle(ImVec2(bx, by), r + S(6) * p, IM_COL32(255, 214, 120, static_cast<int>(120 + 100 * p)), 48, S(3));
+				Vec3 at;
+				bool show = false;
+				if (g_flow == hc::Flow::Pot && g_pot && g_chunks.CountIn(hc::Chunks::State::Pot) + g_tossedIn > 0) {
+					show = true;
+					at = { L::kPotX + L::kPotR + 2.5, L::kPotY, L::kPotRim };
+					if (g_pot->Burn() > 0.25) {
+						warn = "Catching on the bottom: stir!";
+					}
+				} else if (g_flow == hc::Flow::Oven && g_oven && g_oven->InOven()) {
+					show = true;
+					at = { L::kOvenX + 8.0, L::kOvenY - 2.0, OvenFloor() + 6.0 };
+				}
+				if (show) {
+					float sx = 0, sy = 0;
+					if (Scene::Project(at, sx, sy)) {
+						TimerBar(dl, sx, sy, g_timer, rate);
+					}
+					bool raw = false;
+					glow = g_timer.TierNow(raw) == hc::Tier::Masterwork || g_hold == Hold::LadleOut || g_hold == Hold::Bread;
+					if (!warn && rate <= 0.0) {
+						warn = "The fire is out: it isn't cooking";
+					}
 				}
 			}
+			if (warn) {
+				float fx = 0, fy = 0;
+				if (Scene::Project(FireCenter() + Vec3{ 0, 0, 2.0 }, fx, fy)) {
+					TextC(dl, F.sansSemi, fx, fy + S(34), IM_COL32(240, 170, 140, 255), warn, 0.05f, 0.9f);
+				}
+			}
+			// the bowls and plates: what's been served, and where the next goes
+			SlotWords(dl, glow);
 		}
 
 		void ToastLine(float W, float H)
@@ -6005,7 +6057,7 @@ namespace Cook
 				}
 				lines.push_back("Open the door (drag it left). Drag the peel under the dough, carry it into the mouth, shut the door. Peek, but each peek lets the heat out.");
 			}
-			lines.push_back("The hourglass and its counter show the seconds left. Take it off in the very second it reaches zero for a masterwork; every second after makes it worse, and past seven it burns. Each log burns 15 seconds; while one burns it cooks, more logs cook a little faster. The station's firewood runs out, then your own pack's.");
+			lines.push_back("The hourglass and its counter show the seconds left. Take it off in the very second it reaches zero for a masterwork; every second after makes it worse, and past seven it burns. Each log burns 20 seconds; while one burns it cooks, more logs cook a little faster. The station's firewood runs out, then your own pack's.");
 			float h = S(80);
 			for (const auto& l : lines) {
 				h += F.sans->CalcTextSizeA(F.sans->FontSize, FLT_MAX, w - S(64), l.c_str()).y + S(10);
@@ -6089,8 +6141,46 @@ namespace Cook
 			return {};
 		}
 
+		// Several portions: nothing over the kitchen; each one's word under its plate, a line and the buttons below
+		void DrawResultMany(float W, float H)
+		{
+			auto* dl = ImGui::GetForegroundDrawList();
+			SlotWords(dl, false);
+			int counts[4] = {};
+			for (const auto& [t, raw] : g_portionTiers) {
+				++counts[raw ? 0 : static_cast<int>(t)];
+			}
+			std::string sum;
+			for (int t = 3; t >= 0; --t) {
+				if (counts[t]) {
+					sum += fmt::format("{}{} {}", sum.empty() ? "" : "   ", counts[t], Upper(t == 0 ? "Burnt / raw" : hc::TierName(static_cast<hc::Tier>(t))));
+				}
+			}
+			const float y = H - S(150);
+			const float w = (std::max)(Measure(F.menu, Upper(g_givenName), 0.2f), Measure(F.sansSemi, sum, 0.08f)) + S(80);
+			dl->AddRectFilled(ImVec2(W * 0.5f - w * 0.5f, y - S(10)), ImVec2(W * 0.5f + w * 0.5f, y + S(58)), IM_COL32(12, 10, 8, 170), S(8));
+			TextC(dl, F.menu, W * 0.5f, y, kGold, Upper(g_givenName), 0.2f, 0.8f);
+			TextC(dl, F.sansSemi, W * 0.5f, y + S(28), kWhite, sum, 0.08f, 0.8f);
+			BeginArea("##again", ImVec2(W * 0.5f - S(300), H - S(90)), ImVec2(S(600), S(60)));
+			switch (MenuButtons("result", { { "Cook another", false }, { "Done", false } }, W * 0.5f, H - S(80))) {
+			case 0:
+				Post(Act::Again);
+				break;
+			case 1:
+				Post(Act::Done);
+				break;
+			default:
+				break;
+			}
+			ImGui::End();
+		}
+
 		void DrawResult(float W, float H)
 		{
+			if (g_portionTiers.size() > 1) {
+				DrawResultMany(W, H);
+				return;
+			}
 			auto* bg = ImGui::GetBackgroundDrawList();
 			Vignette(bg, W, H);
 			const double t = g_clock - g_serveAt;

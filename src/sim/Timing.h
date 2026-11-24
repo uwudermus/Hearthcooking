@@ -11,7 +11,7 @@ namespace hc
 	namespace timing
 	{
 		// ------------------------------------------------------------------ the tuning
-		constexpr double kLogBurn = 15.0;      // seconds a log burns
+		constexpr double kLogBurn = 20.0;      // seconds a log burns
 		constexpr int    kMaxLogs = 5;         // logs burning at once
 		constexpr int    kStartLogsMin = 2;    // a station's own logs, picked at random
 		constexpr int    kStartLogsMax = 5;

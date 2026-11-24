@@ -438,29 +438,57 @@ namespace Recipes
 
 	void DebugGiveRandom(int a_kinds, int a_most)
 	{
-		// every ingredient any cooking recipe asks for, once each
-		std::vector<std::pair<RE::TESBoundObject*, std::string>> all;
+		// every ingredient any cooking recipe asks for, once each, sorted into kinds
+		using Pool = std::vector<std::pair<RE::TESBoundObject*, std::string>>;
+		Pool meat, veg, bake, other;
+		auto seen = [&](RE::TESBoundObject* f) {
+			for (const Pool* p : { &meat, &veg, &bake, &other }) {
+				for (const auto& e : *p) {
+					if (e.first == f) {
+						return true;
+					}
+				}
+			}
+			return false;
+		};
 		for (const auto& r : g_recipes) {
 			for (const auto& in : r->ings) {
-				if (in.form && std::none_of(all.begin(), all.end(), [&](const auto& a) { return a.first == in.form; })) {
-					all.emplace_back(in.form, in.name);
+				if (!in.form || seen(in.form) || in.role == Role::Salt) {
+					continue;
+				}
+				Pool& p = in.role == Role::Meat ? meat : in.role == Role::Chop ? veg : (in.role == Role::Dough || in.role == Role::Filling || r->oven) ? bake : other;
+				p.emplace_back(in.form, in.name);
+			}
+		}
+		std::mt19937 rng{ std::random_device{}() };
+		for (Pool* p : { &meat, &veg, &bake, &other }) {
+			std::shuffle(p->begin(), p->end(), rng);
+		}
+		// in turn from each kind until there are enough: baking, vegetables, meat, the rest
+		std::vector<std::pair<RE::TESBoundObject*, std::string>> pick;
+		std::size_t at[4] = {};
+		Pool*       order[4] = { &bake, &veg, &meat, &other };
+		for (bool more = true; more && static_cast<int>(pick.size()) < a_kinds;) {
+			more = false;
+			for (int k = 0; k < 4 && static_cast<int>(pick.size()) < a_kinds; ++k) {
+				if (at[k] < order[k]->size()) {
+					pick.push_back((*order[k])[at[k]++]);
+					more = true;
 				}
 			}
 		}
-		if (all.empty()) {
+		if (pick.empty()) {
 			RE::SendHUDMessage::ShowHUDMessage("Hearthcooking: no recipes found");
 			return;
 		}
-		std::mt19937 rng{ std::random_device{}() };
-		std::shuffle(all.begin(), all.end(), rng);
 		std::uniform_int_distribution<int> amount(1, (std::max)(1, a_most));
-		const int n = (std::min)(a_kinds, static_cast<int>(all.size()));
 		std::vector<std::pair<RE::TESBoundObject*, int>> give;
-		for (int i = 0; i < n; ++i) {
+		for (const auto& [f, name] : pick) {
 			const int c = amount(rng);
-			give.emplace_back(all[i].first, c);
-			spdlog::info("Debug: gave {} x{}", all[i].second, c);
+			give.emplace_back(f, c);
+			spdlog::info("Debug: gave {} x{}", name, c);
 		}
+		const int n = static_cast<int>(give.size());
 		// on the game's own thread (the settings page runs on the render thread)
 		SKSE::GetTaskInterface()->AddTask([give, n] {
 			auto* pc = RE::PlayerCharacter::GetSingleton();

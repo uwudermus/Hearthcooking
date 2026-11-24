@@ -48,14 +48,14 @@ static void TestFire()
 		f.Add();
 	}
 	CHECK(f.Burning() == kMaxLogs, "at most 5");
-	for (int i = 0; i < 1490; ++i) {
+	for (int i = 0; i < 1990; ++i) {
 		f.Step(0.01);
 	}
-	CHECK(f.Lit(), "still burning at 14.9 s");
+	CHECK(f.Lit(), "still burning at 19.9 s");
 	for (int i = 0; i < 20; ++i) {
 		f.Step(0.01);
 	}
-	CHECK(!f.Lit(), "out after 15 s");
+	CHECK(!f.Lit(), "out after 20 s");
 	// cooking pauses with the fire out
 	Piece p;
 	p.time = 10.0;

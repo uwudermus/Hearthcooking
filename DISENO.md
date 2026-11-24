@@ -11,7 +11,7 @@ Se mantiene igual: abre el menú de cocina del propio juego y da el plato vanill
 - Cada estación (horno, olla, asador) empieza con un número **aleatorio de 2 a 5 leños** disponibles.
 - También se puede usar la **Leña (Firewood) del inventario** del jugador; cada leño usado se descuenta.
 - Sin leña en la estación ni en el inventario solo queda la Cocina Rápida.
-- Un leño arde **15 segundos** y se apaga; hay que recargar.
+- Un leño arde **20 segundos** y se apaga; hay que recargar.
 - **Mientras haya al menos un leño ardiendo, la estación cocina.** Si no hay ninguno, la cocción se **pausa**.
 - Leños ardiendo a la vez acortan el tiempo, cada uno la mitad que el anterior:
 
