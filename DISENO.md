@@ -11,7 +11,7 @@ Se mantiene igual: abre el menú de cocina del propio juego y da el plato vanill
 - Cada estación (horno, olla, asador) empieza con un número **aleatorio de 2 a 5 leños** disponibles.
 - También se puede usar la **Leña (Firewood) del inventario** del jugador; cada leño usado se descuenta.
 - Sin leña en la estación ni en el inventario solo queda la Cocina Rápida.
-- Un leño arde **20 segundos** y se apaga; hay que recargar.
+- Un leño arde **20 segundos** y se apaga; hay que recargar. Una barra por leño muestra cuánto le queda.
 - **Mientras haya al menos un leño ardiendo, la estación cocina.** Si no hay ninguno, la cocción se **pausa**.
 - Leños ardiendo a la vez acortan el tiempo, cada uno la mitad que el anterior:
 
@@ -64,16 +64,33 @@ Se mantiene igual: abre el menú de cocina del propio juego y da el plato vanill
   tienes 3, máximo 3.
 - Máximos por estación: horno 4, asador 4, olla 5.
 
-### Horno (por tandas)
-- Se amasa una vez y se **corta la masa** en tantas piezas como platos.
-- El tiempo de cada pieza depende de su tamaño respecto a la pieza ideal (masa total / número de platos):
-  `T_pieza = T × (tamaño / ideal)`, entre 0,3×T y 2×T. Un corte diminuto puede bajar 10 s a 3 s y quemarse.
-- **La tanda sale entera.** Si dos piezas tardan 10 s y una 5 s, eliges entre sacar dos crudas o una quemada.
+### Horno (por tandas) — REDISEÑO ACORDADO (pendiente de programar)
+Reemplaza la franja de corte de la v0.6 (se quita).
+- Los ingredientes aparecen multiplicados por N en la mesa.
+- **Recetas con masa** (pasteles, apple dumplings, pan, sweetrolls...): la harina y demás van al bol y sale **una sola
+  masa grande**. Se amasa con una **barra de progreso de amasado** (la masa grande pide ~1,5x el amasado normal).
+  Luego se **corta en 3D con el cuchillo en la tabla** (como las verduras) en N trozos; el tamaño de cada trozo
+  decide su tiempo en el horno.
+- **Recetas sin masa** (garlic bread y similares): se prepara cada pieza N veces, una por una.
+- Los trozos esperan en un **compartimento abajo de la mesa**. En el centro se arma uno por uno (rellenar,
+  cerrar, doblar...). Al terminar uno se baja a la **bandeja de horneado** y se sube el siguiente, hasta N.
+- **La pala ya no lleva la masa sola: mete la bandeja entera al horno y la saca entera.** Luego se emplata, un
+  plato por pieza, y termina el proceso.
+
+### Caos (todas las estaciones)
+- Se quitan los bloqueos de orden ("echa la sal primero", "pon leña primero", "la masa no está completa"...).
+  El jugador puede saltarse pasos o hacerlos en otro orden.
+- Castigo: **cada paso saltado o fuera de orden baja un nivel** de calidad (Obra Maestra → Buena...). Errores
+  graves (masa sin amasar, pastel sin cerrar) dejan el plato como máximo en Normal.
+- **El error se ve en el modelo del plato**: un sweetroll mal hecho sale aplastado o "mushy" (deformado, pálido o
+  irregular), no solo con otro nombre.
 
 ### Asador
+- Los ingredientes aparecen multiplicados por N (pendiente).
 - Hasta 4 presas, **cada una con su temporizador**, que empieza cuando se monta. Se sacan una por una.
 
 ### Olla
+- Los ingredientes aparecen multiplicados por N y se cortan todos (pendiente).
 - Todo se cocina junto. Al servir con el cucharón, **cada plato se califica en el segundo en que se sirve**. El
   primero puede ser Obra Maestra y los siguientes van saliendo peor.
 
@@ -88,3 +105,10 @@ tipografía serif, reloj de arena ilustrado. Todo arte propio; nada copiado de o
 2. Integración en el juego: reloj de arena, contador, leña del inventario, quitar la barra. (hecho, falta compilar y probar)
 3. Varios platos: slider, corte de masa, tandas del horno, 4 presas en el asador, servir en la olla.
 4. Interfaz nueva.
+
+## Estado (24 nov 2026)
+Hecho (v0.7, rama `nuestra-version` del fork uwudermus/Hearthcooking; cada push compila solo y publica el mod en la
+rama `dist`): reglas de tiempo y calidad, leña de 20 s con barra, porciones con slider, asador con varias carnes,
+olla con varios cuencos, platos por porción con su calidad debajo, barras verticales de tiempo, autoparche de
+listas de comida (iNeed), debug de 20 ingredientes, interfaz oscura con dorado.
+Siguiente: el rediseño del horno de arriba (en dos entregas) y el caos.
