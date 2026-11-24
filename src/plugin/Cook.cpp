@@ -187,6 +187,7 @@ namespace Cook
 			Scene::Id pile[3]{ -1, -1, -1 };
 			std::vector<Scene::Id> butter;  // butter cut into the flour
 			std::vector<Scene::Id> extraServe;  // our version: a bowl or plate per portion after the first
+			std::vector<Scene::Id> slotDish;    // and the stew ladled into each
 			std::vector<Scene::Id> crimps, pieRim, galette, leafBits, dumpFolds;  // (a dumpling's folds; a pie's fluted rim, a scallop a pinch; a crostata's eight pleats)
 			std::vector<std::pair<Scene::Id, Vec3>> fill;  // the filling on the pie (disk-local, units)
 			std::array<bool, static_cast<int>(Kit::Role::Count)> game{};  // this one is the game's own mesh (fitted), not ours
@@ -4924,6 +4925,41 @@ namespace Cook
 					}
 				}
 			}
+			// ---- our version: each portion ladled into its own bowl (the game's dish, in place of the empty bowl)
+			if (g_flow == hc::Flow::Pot && ServeCount() > 1) {
+				P.slotDish.resize(g_slots.size(), -1);
+				for (int k = 0; k < static_cast<int>(g_slots.size()); ++k) {
+					if (g_slots[k].count == 0) {
+						continue;
+					}
+					auto& id = P.slotDish[k];
+					if (id < 0) {
+						id = AddResult();
+						if (id < 0) {
+							continue;
+						}
+						const Scene::Id bowl = k == 0 ? P.bowl : (k - 1 < static_cast<int>(P.extraServe.size()) ? P.extraServe[k - 1] : -1);
+						if (bowl >= 0) {
+							Scene::Hide(bowl, true);
+						}
+					}
+					Vec3 mn, mx;
+					if (!Scene::Bounds(id, mn, mx)) {
+						continue;
+					}
+					const double big = (std::max)(mx.x - mn.x, mx.y - mn.y);
+					const double sc = 7.5 / (std::max)(0.1, big);
+					const Vec3   c{ (mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z };
+					const Quat   q = RotZ(0.6 * k);
+					Scene::Place(id, SlotAt(k) - q.Rotate(c) * sc, q, static_cast<float>(sc));
+					auto& lk = Scene::LookOf(id);
+					lk.lift[3] = 0.0f;
+					lk.fx[2] = 0.0f;
+					lk.cookMode = g_slots[k].tier == hc::Tier::Burnt ? 1 : 0;
+					lk.cook[0] = 1.65f;
+					Scene::Hide(id, false);
+				}
+			}
 			// ---- the dish served
 			if (g_phase == Phase::Result && P.result >= 0) {
 				Vec3 mn, mx;
@@ -5891,6 +5927,28 @@ namespace Cook
 					const int pack = (std::max)(0, PackLogs() - g_invLogsUsed);
 					const auto t = pack > 0 ? fmt::format("Firewood {} (+{} in your pack)", g_stationLogs, pack) : fmt::format("Firewood {}", g_stationLogs);
 					TextC(dl, F.sansSemi, px, py - S(44), LogsLeft() > 0 ? kWhite : IM_COL32(230, 150, 130, 255), t, 0.05f, 0.9f);
+					// our version: how long the fire has left, a bar per log burning
+					const int burning = g_fire.Logs();
+					float     by = py - S(44) - S(10);
+					if (burning > 0) {
+						double most = 0.0;
+						for (int k = 0; k < burning; ++k) {
+							most = (std::max)(most, g_fire.Fuel(k));
+						}
+						const float bw = S(150), bh = S(9);
+						for (int k = burning - 1; k >= 0; --k) {
+							const double f = Clamp(g_fire.Fuel(k), 0.0, 1.0);
+							by -= bh + S(4);
+							dl->AddRectFilled(ImVec2(px - bw * 0.5f - S(2), by - S(2)), ImVec2(px + bw * 0.5f + S(2), by + bh + S(2)), IM_COL32(12, 10, 8, 190), S(3));
+							const ImU32 c = f > 0.5 ? IM_COL32(236, 150, 60, 240) : f > 0.2 ? IM_COL32(220, 110, 45, 240) : IM_COL32(200, 60, 40, 250);
+							dl->AddRectFilled(ImVec2(px - bw * 0.5f, by), ImVec2(px - bw * 0.5f + bw * static_cast<float>(f), by + bh), c, S(2));
+						}
+						const double secs = most * hc::timing::kLogBurn;
+						TextC(dl, F.sansSemi, px, by - F.sansSemi->FontSize - S(6), secs < 5.0 ? IM_COL32(240, 130, 110, 255) : IM_COL32(236, 180, 110, 255),
+							fmt::format("Fire: {:.0f} s", secs), 0.05f, 0.9f);
+					} else {
+						TextC(dl, F.sansSemi, px, by - F.sansSemi->FontSize, IM_COL32(170, 160, 150, 255), "Fire: out", 0.05f, 0.9f);
+					}
 				}
 			}
 			if (g_served) {

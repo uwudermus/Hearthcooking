@@ -108,6 +108,43 @@ namespace Recipes
 		float MagMult(hc::Tier t) { return static_cast<float>(hc::timing::Multipliers(t).magnitude); }
 		float DurMult(hc::Tier t) { return static_cast<float>(hc::timing::Multipliers(t).duration); }
 
+		// Our version: the lists other mods keep food on (needs mods such as iNeed sort food by FormLists): our dish goes
+		// on every list the game's dish is on, so it's known as that food rather than asked about. Built once, at the
+		// first dish; re-done at every load (the lists' runtime additions are the game's to save or not).
+		void MirrorLists(RE::AlchemyItem* a_base, RE::TESForm* a_ours)
+		{
+			static std::unordered_map<RE::FormID, std::vector<RE::BGSListForm*>> s_on;
+			static bool s_built = false;
+			if (!s_built) {
+				s_built = true;
+				if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+					for (auto* l : dh->GetFormArray<RE::BGSListForm>()) {
+						if (!l) {
+							continue;
+						}
+						l->ForEachForm([&](RE::TESForm* a_f) {
+							if (a_f && a_f->Is(RE::FormType::AlchemyItem)) {
+								s_on[a_f->GetFormID()].push_back(l);
+							}
+							return RE::BSContainer::ForEachResult::kContinue;
+						});
+					}
+				}
+				spdlog::info("Food lists: {} foods are on other mods' lists", s_on.size());
+			}
+			const auto it = s_on.find(a_base->GetFormID());
+			if (it == s_on.end()) {
+				return;
+			}
+			for (auto* l : it->second) {
+				if (!l->HasForm(a_ours)) {
+					l->AddForm(a_ours);
+					const auto* file = l->GetFile(0);
+					spdlog::info("  {} put on list {:08X} ({})", a_ours->GetName(), l->GetFormID(), file ? file->GetFilename() : "?");
+				}
+			}
+		}
+
 		// Makes slot a_k a copy of the game's dish at a tier
 		bool Bind(int a_k, RE::AlchemyItem* a_base, hc::Tier a_tier)
 		{
@@ -192,6 +229,7 @@ namespace Recipes
 				s->AddKeywords(add);
 				slot.keywords = add;
 			}
+			MirrorLists(a_base, s);
 			slot.base = a_base->GetFormID();
 			slot.tier = a_tier;
 			slot.used = true;
