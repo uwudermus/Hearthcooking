@@ -5127,11 +5127,11 @@ namespace Cook
 				case Act::Cut:
 					if (NeedCut() && static_cast<int>(g_cuts.size()) < ServeCount() - 1) {
 						const double at = Clamp(arg / 1000.0, 0.02, 0.98);
-						bool         near = false;
+						bool         tooClose = false;
 						for (double c : g_cuts) {
-							near |= std::abs(c - at) < 0.03;
+							tooClose |= std::abs(c - at) < 0.03;
 						}
-						if (!near) {
+						if (!tooClose) {
 							g_cuts.push_back(at);
 							Audio::Take("chop_", 0.6f);
 							if (static_cast<int>(g_cuts.size()) == ServeCount() - 1) {
