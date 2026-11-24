@@ -112,7 +112,9 @@ namespace Cook
 			Ball,        // the ball of dough, out of the bowl onto the board
 			Apples,      // the bowl of cut filling, over the dough
 			Roll,        // the rolling pin pressed and rolled over the dough
-			Sauce        // a sauce's bowl of liquids, lifted to pour into the pot
+			Sauce,       // a sauce's bowl of liquids, lifted to pour into the pot
+			Tray,        // our version: the baking tray, into the oven or out
+			TrayItem     // a bake off the tray, to its plate
 		};
 
 		struct Unit
@@ -189,6 +191,8 @@ namespace Cook
 			std::vector<Scene::Id> extraServe;  // our version: a bowl or plate per portion after the first
 			std::vector<Scene::Id> slotDish;    // and the stew ladled into each
 			std::vector<Scene::Id> doughPieces; // the big dough cut up
+			Scene::Id              tray = -1;   // the baking tray
+			std::vector<Scene::Id> trayRaw, trayDish;  // on it: each piece as raw dough, or as the bake
 			std::vector<Scene::Id> crimps, pieRim, galette, leafBits, dumpFolds;  // (a dumpling's folds; a pie's fluted rim, a scallop a pinch; a crostata's eight pleats)
 			std::vector<std::pair<Scene::Id, Vec3>> fill;  // the filling on the pie (disk-local, units)
 			std::array<bool, static_cast<int>(Kit::Role::Count)> game{};  // this one is the game's own mesh (fitted), not ours
@@ -218,6 +222,7 @@ namespace Cook
 		double               g_clock = 0.0;
 		std::string          g_toast;
 		double               g_toastAt = -10.0;
+		bool                 g_confirmFinish = false;  // our version: "finish the dish now?"
 		bool                 g_help = false, g_confirm = false, g_soundBox = false;  // (g_soundBox: M's panel of sliders)
 
 		// the dish on the go
@@ -399,12 +404,29 @@ namespace Cook
 			int      count = 0;  // what's on it (meats; a ladle of stew)
 			hc::Tier tier = hc::Tier::Masterwork;
 			bool     raw = false;
+			bool     mushy = false;  // made carelessly: it comes out misshapen
+			int      piece = -1;     // the oven: which piece of the batch
 		};
 		std::vector<Slot> g_slots;  // a bowl or plate per portion, along the front of the table
 		// the oven's batch: the dough cut into pieces, each baking to its own time by its size
 		std::vector<double>            g_cuts;      // where the knife went, 0..1 along the dough
 		bool                           g_batchCut = false;
 		std::vector<hc::timing::Piece> g_batch;
+		// each piece of the batch: where it is, and whether it was made up properly before it went down
+		enum class TraySt
+		{
+			Waiting,  // raw, on the tray, waiting its turn
+			Current,  // on the board, being made up
+			OnTray,   // made up (or not) and put down on the tray
+			Plated
+		};
+		struct TrayPiece
+		{
+			TraySt st = TraySt::Current;
+			bool   made = false;  // made up properly (filled, closed...) before it went on the tray
+			double size = 1.0;    // its share of the dough
+		};
+		std::vector<TrayPiece> g_tray;
 		std::vector<std::pair<hc::Tier, bool>> g_portionTiers;  // each portion as it came off the fire (tier, raw)
 
 		RE::TESBoundObject* Firewood() { return RE::TESForm::LookupByID<RE::TESBoundObject>(0x0006F993); }  // Skyrim.esm Firewood01
@@ -495,7 +517,12 @@ namespace Cook
 				sizes += fmt::format("{}{:.0f}%", i ? "  " : "", size * 100.0);
 			}
 			g_batchCut = true;
-			Toast(fmt::format("Pieces: {}", sizes));
+			g_tray.assign(n, TrayPiece{});
+			for (int i = 0; i < n; ++i) {
+				g_tray[i].size = c[i + 1] - c[i];
+				g_tray[i].st = i == 0 ? TraySt::Current : TraySt::Waiting;
+			}
+			Toast(fmt::format("Pieces: {}  (the rest wait on the tray)", sizes));
 			spdlog::info("Dough cut in {}: {}", n, sizes);
 		}
 
@@ -609,7 +636,10 @@ namespace Cook
 			Knife,
 			Portions,
 			Cut,
-			CutUndo
+			CutUndo,
+			FinishAsk,
+			FinishYes,
+			FinishNo
 		};
 		bool board_kneading();
 		void NextKnife();
@@ -997,6 +1027,7 @@ namespace Cook
 				}
 				P.door = Add(Game(Kit::Role::Oven) ? "OvenDoorArch" : "OvenDoor");  // (the game's mouth is a round arch)
 				P.peel = KitAdd(Kit::Role::Peel);
+				P.tray = Add("Board");  // our version: the baking tray (the board's shape, flattened, in dark iron)
 				// the mixing bowl (water, then dough) and the bowl the cut filling waits in
 				P.mixBowl = KitAdd(Kit::Role::Bowl);
 				Settle(P.mixBowl, Kit::Role::Bowl, kMixAt, { 8.0, 8.0, 0.0 }, 0.0, false, kMixAt);
@@ -1314,12 +1345,26 @@ namespace Cook
 			return false;
 		}
 
+		// How many times over the ingredients lie on the table (DISENO.md 5): the spit, every portion's meat; the pot and a
+		// dough, once for one or two portions and twice for three or more; a pie's fillings once (shared out between
+		// the pieces); a dish on bread already made, once
+		int Reps(Role a_role)
+		{
+			if (g_flow == hc::Flow::Spit) {
+				return g_portions;
+			}
+			if (g_flow == hc::Flow::Oven && (!FlourRecipe() || a_role != Role::Dough)) {
+				return 1;
+			}
+			return g_portions >= 3 ? 2 : 1;
+		}
+
 		int UnitsWanted()
 		{
 			int n = 0;
 			for (const auto& in : g_recipe->ings) {
 				if (in.role != Role::Salt) {
-					n += in.count * (g_flow != hc::Flow::Oven || FlourRecipe() ? g_portions : 1);
+					n += in.count * Reps(in.role);
 				}
 			}
 			return (std::min)(n, kMaxUnits);
@@ -1333,7 +1378,7 @@ namespace Cook
 				if (in.role == Role::Salt) {
 					continue;
 				}
-				const int reps = g_flow != hc::Flow::Oven || FlourRecipe() ? g_portions : 1;
+				const int reps = Reps(in.role);
 				for (int c = 0; c < in.count * reps && static_cast<int>(g_units.size()) < kMaxUnits; ++c) {
 					Unit u;
 					u.dish = c / (std::max)(1, in.count);
@@ -1669,6 +1714,7 @@ namespace Cook
 			g_tossedIn = 0;
 			g_crankRun = 0;
 			g_stirred = 0;
+			g_confirmFinish = false;
 		}
 
 		void ShowStation()
@@ -1698,6 +1744,10 @@ namespace Cook
 			g_cuts.clear();
 			g_batchCut = false;
 			g_batch.clear();
+			g_tray.clear();
+			if (a_r->flow == hc::Flow::Oven) {
+				// (set up once the recipe's flour is known: below, after the units)
+			}
 			g_chunks.Clear();
 			g_pieces.clear();
 			BuildKitchen(a_r->oven, g_flow);
@@ -1737,6 +1787,17 @@ namespace Cook
 			}
 			if (g_flow == hc::Flow::Oven && FlourRecipe() && g_portions > 1) {
 				g_oven->SetKneadScale(1.5);  // one big dough for every portion: half again the work
+			}
+			if (g_flow == hc::Flow::Oven && !(FlourRecipe() && g_portions > 1)) {
+				// no dough to cut: one piece made up on the board; the others (a dish on bread made several times over)
+				// come with it
+				g_batch.assign(g_portions, hc::timing::Piece{});
+				g_tray.assign(g_portions, TrayPiece{});
+				for (int i = 0; i < g_portions; ++i) {
+					g_batch[i].time = g_timer.time;
+					g_tray[i].size = 1.0 / g_portions;
+					g_tray[i].st = i == 0 ? TraySt::Current : TraySt::Waiting;
+				}
 			}
 			// no dough to make (a dish built on bread already made): the first filling is the base
 			if (g_flow == hc::Flow::Oven && g_doughNeeded == 0) {
@@ -1862,20 +1923,9 @@ namespace Cook
 			}
 			// our version: each portion's tier is the second it came off the fire; the old lines stay as advice
 			g_portionTiers.clear();
-			if (g_flow != hc::Flow::Oven) {
-				for (const auto& sl : g_slots) {
-					if (sl.count > 0) {
-						g_portionTiers.emplace_back(sl.tier, sl.raw);
-					}
-				}
-			}
-			if (g_flow == hc::Flow::Oven && !g_batch.empty()) {
-				for (int i = 0; i < static_cast<int>(g_batch.size()); ++i) {
-					g_batch[i].TakeOut();
-					g_portionTiers.emplace_back(g_batch[i].tier, g_batch[i].raw);
-					if (i < static_cast<int>(g_slots.size())) {
-						FillSlot(i, g_batch[i].tier, g_batch[i].raw);
-					}
+			for (const auto& sl : g_slots) {
+				if (sl.count > 0) {
+					g_portionTiers.emplace_back(sl.tier, sl.raw);
 				}
 			}
 			if (g_portionTiers.empty()) {
@@ -2125,6 +2175,26 @@ namespace Cook
 		}
 		bool OverMix(float mx, float my) { return NearScreen(kMixAt + Vec3{ 0, 0, 1.6 }, mx, my, 4.2, 40.0f); }
 		bool OverFill(float mx, float my) { return NearScreen(kFillAt + Vec3{ 0, 0, 1.4 }, mx, my, 6.0, 70.0f); }
+		bool TrayFlow() { return g_recipe && g_flow == hc::Flow::Oven; }
+		int  CurrentPiece()
+		{
+			for (int i = 0; i < static_cast<int>(g_tray.size()); ++i) {
+				if (g_tray[i].st == TraySt::Current) {
+					return i;
+				}
+			}
+			return -1;
+		}
+		Vec3 TrayRest() { return { 17.0, -6.0, 0.0 }; }
+		double TraySpacing() { return ServeCount() > 1 ? (std::min)(3.4, 10.0 / ServeCount()) : 0.0; }
+		double TrayWidth() { return (std::max)(7.0, TraySpacing() * ServeCount() + 2.6); }
+		Vec3 g_trayCarry;
+		Vec3 TrayAt();
+		bool TrayGrab(float a_mx, float a_my);
+		bool OverTray(float a_mx, float a_my);
+		void PutOnTray();
+		Vec3 TraySpot(int a_i) { return TrayAt() + Vec3{ (a_i - (ServeCount() - 1) * 0.5) * TraySpacing(), 0.0, 0.45 }; }
+
 		// The big dough kneaded on the board, waiting for the knife
 		bool CutStage()
 		{
@@ -2136,7 +2206,12 @@ namespace Cook
 		double DoughRadius()
 		{
 			const double grow = Clamp(static_cast<double>(g_doughParts) / (std::max)(1, g_doughNeeded), 0.3, 1.0);
-			return 3.0 * std::cbrt(grow) * (FlourRecipe() && ServeCount() > 1 ? std::cbrt(static_cast<double>(ServeCount())) * 0.85 : 1.0);
+			if (g_batchCut) {
+				const int c = CurrentPiece();
+				const double share = c >= 0 ? g_tray[c].size * ServeCount() : 1.0;  // a piece: by its share of the dough
+				return 3.0 * std::cbrt((std::max)(0.2, share)) * 0.9;
+			}
+			return 3.0 * std::cbrt(grow) * (FlourRecipe() && ServeCount() > 1 ? std::cbrt(static_cast<double>(Reps(Role::Dough))) * 0.9 : 1.0);
 		}
 
 		bool AnyOnBoard()
@@ -2552,7 +2627,10 @@ namespace Cook
 			}
 			// the oven: its door, what's in it, the dough
 			if (oven) {
-				if (g_oven->InOven() && g_peelT < 0 && NearScreen(BreadAt() + Vec3{ 0, 0, 1.5 }, mx, my, 4.0, 30.0f)) {
+				if (TrayFlow() && TrayGrab(mx, my)) {
+					return;
+				}
+				if (!TrayFlow() && g_oven->InOven() && g_peelT < 0 && NearScreen(BreadAt() + Vec3{ 0, 0, 1.5 }, mx, my, 4.0, 30.0f)) {
 					Toast(g_door > 0.6 ? "Too hot for hands: take it out with the peel" : "Open the door, then take it out with the peel");
 					return;
 				}
@@ -2583,7 +2661,11 @@ namespace Cook
 					g_hold = Hold::Apples;
 					return;
 				}
-				if (P.peel >= 0 && g_peelT < 0 && NearScreen(PeelRest(), mx, my, 4.5, 40.0f)) {
+				// our version: the tray, into the oven or out (its mouth, door open), and what's on it
+				if (TrayFlow() && TrayGrab(mx, my)) {
+					return;
+				}
+				if (!TrayFlow() && P.peel >= 0 && g_peelT < 0 && NearScreen(PeelRest(), mx, my, 4.5, 40.0f)) {
 					g_hold = Hold::Peel;
 					g_peelLoaded = false;
 					g_peelAt = PeelRest();
@@ -2595,7 +2677,7 @@ namespace Cook
 					g_grabY = g_door;
 					return;
 				}
-				if (g_doughParts > 0 && g_doughOnBoard && !g_oven->InOven() && !g_oven->Out()) {
+				if (g_doughParts > 0 && g_doughOnBoard && !g_oven->InOven() && (!g_oven->Out() || TrayFlow()) && (!TrayFlow() || CurrentPiece() >= 0 || NeedCut())) {
 					double x = 0, y = 0;
 					if (OnPlane(mx, my, kBoardTop + 1.0, x, y)) {
 						const double dx = x - g_doughAt.x, dy = y - g_doughAt.y, r = std::hypot(dx, dy);
@@ -2688,8 +2770,14 @@ namespace Cook
 			case Hold::FireLog:
 			case Hold::Meat:
 			case Hold::Bread:
+			case Hold::TrayItem:
 				if (OnPlane(mx, my, kCarryZ, x, y)) {
 					g_carry = { x, y, kCarryZ };
+				}
+				break;
+			case Hold::Tray:
+				if (OnPlane(mx, my, 1.0, x, y)) {
+					g_trayCarry = { x, y, 1.0 };
 				}
 				break;
 			case Hold::Board:
@@ -2958,6 +3046,236 @@ namespace Cook
 			if (a_unit >= 0 && a_unit < static_cast<int>(g_units.size())) {
 				g_units[a_unit].at = Unit::At::Cloth;
 			}
+		}
+
+		// ---------------------------------------------------------------- our version: the baking tray
+		Vec3 TrayAt()
+		{
+			if (g_hold == Hold::Tray) {
+				return g_trayCarry;
+			}
+			if (g_oven && g_oven->InOven()) {
+				return BreadAt() + Vec3{ 0.0, 0.5, 0.0 };
+			}
+			return TrayRest();
+		}
+
+		bool OverTray(float a_mx, float a_my)
+		{
+			return g_oven && !g_oven->InOven() && NearScreen(TrayAt() + Vec3{ 0, 0, 0.5 }, a_mx, a_my, TrayWidth() * 0.55, 50.0f);
+		}
+
+		// The next piece on the board: its shape made afresh (the dough's working stays: it was kneaded as one)
+		void ResetPiece()
+		{
+			g_rolled = false;
+			g_flat = 0.0;
+			for (int k = 0; k < 4; ++k) {
+				g_fold[k] = g_foldWant[k] = 0.0;
+			}
+			g_foldSide = -1;
+			g_pinHeld = false;
+			g_squash = 0;
+			g_bowlTip = 0.0;
+			g_bowlPoured = false;
+			g_stock = 0;
+			if (g_oven) {
+				g_oven->ResetShape();
+			}
+			for (auto& [id, at] : P.fill) {
+				Scene::Remove(id);
+			}
+			P.fill.clear();
+			// what was set on the last piece went with it
+			for (int b = 0; b < g_chunks.Count() && b < static_cast<int>(g_pieces.size()); ++b) {
+				if (g_pieces[b].onDough) {
+					g_chunks.At(b).state = hc::Chunks::State::None;
+					Scene::Hide(g_pieces[b].prop, true);
+					Scene::Hide(g_pieces[b].core, true);
+				}
+			}
+			// a whole filling (honey, berries, cheese) is shared: back on the cloth for the next
+			for (auto& u : g_units) {
+				if (u.role == Role::Filling && u.at == Unit::At::Dough && !u.dice && u.cut.cutCount == 0) {
+					u.at = Unit::At::Cloth;
+				}
+			}
+		}
+
+		int Left(TraySt a_st)
+		{
+			int n = 0;
+			for (const auto& t : g_tray) {
+				n += t.st == a_st;
+			}
+			return n;
+		}
+
+		void PutOnTray()
+		{
+			const int c = CurrentPiece();
+			if (c < 0) {
+				return;
+			}
+			const bool made = DoughReady();
+			g_tray[c].st = TraySt::OnTray;
+			g_tray[c].made = made;
+			if (!g_batchCut) {
+				// a dish on bread made several times over: the others go down with it
+				for (auto& t : g_tray) {
+					if (t.st == TraySt::Waiting) {
+						t.st = TraySt::OnTray;
+						t.made = made;
+					}
+				}
+			}
+			g_doughOnBoard = false;
+			ResetPiece();
+			Audio::Take("knead_", 0.5f);
+			const int waiting = Left(TraySt::Waiting);
+			Toast(!made ? "On the tray, not made up: it will bake misshapen" : waiting ? "On the tray: take up the next piece from it" : "All on the tray: now the tray into the oven");
+		}
+
+		bool TrayGrab(float a_mx, float a_my)
+		{
+			if (!g_oven || P.tray < 0 || g_hold != Hold::None) {
+				return false;
+			}
+			if (g_oven->InOven()) {
+				// out of the oven: by its mouth, the door open
+				if (g_door > 0.6 && NearScreen(MouthAt(), a_mx, a_my, 6.0, 50.0f)) {
+					g_hold = Hold::Tray;
+					g_trayCarry = BreadAt() + Vec3{ 0.0, 0.5, 0.0 };
+					return true;
+				}
+				return false;
+			}
+			for (int i = 0; i < static_cast<int>(g_tray.size()); ++i) {
+				auto& t = g_tray[i];
+				if ((t.st != TraySt::Waiting && t.st != TraySt::OnTray) || !NearScreen(TraySpot(i) + Vec3{ 0, 0, 0.8 }, a_mx, a_my, (std::max)(1.4, TraySpacing() * 0.45), 22.0f)) {
+					continue;
+				}
+				if (g_oven->Out()) {
+					g_hold = Hold::TrayItem;  // baked: to its plate
+					g_holdUnit = i;
+					return true;
+				}
+				if (t.st == TraySt::Waiting && g_batchCut && CurrentPiece() < 0) {
+					t.st = TraySt::Current;  // raw: up onto the board, to make up
+					g_doughOnBoard = true;
+					ResetPiece();
+					Audio::Take("knead_", 0.4f);
+					Toast("Make it up, then back onto the tray");
+					return true;
+				}
+			}
+			if (OverTray(a_mx, a_my)) {
+				g_hold = Hold::Tray;
+				g_trayCarry = TrayAt();
+				return true;
+			}
+			return false;
+		}
+
+		// A careless piece: two steps down (masterwork to plain, the rest to burnt)
+		hc::Tier Careless(hc::Tier a_t) { return a_t == hc::Tier::Masterwork ? hc::Tier::Plain : hc::Tier::Burnt; }
+
+		void PlatePiece(int a_i, int a_k)
+		{
+			auto& pc = g_batch[a_i];
+			pc.TakeOut();
+			hc::Tier t = pc.tier;
+			if (!g_tray[a_i].made && !pc.raw) {
+				t = Careless(t);
+			}
+			FillSlot(a_k, t, pc.raw);
+			g_slots[a_k].mushy = !g_tray[a_i].made;
+			g_slots[a_k].piece = a_i;
+			g_tray[a_i].st = TraySt::Plated;
+			Audio::Play({ t == hc::Tier::Burnt ? "burnt" : "done", 0.6f });
+			if (Left(TraySt::Waiting) + Left(TraySt::OnTray) + Left(TraySt::Current) == 0) {
+				Serve();
+			}
+		}
+
+		void PlatePieceQuiet(int a_i, int a_k)
+		{
+			auto& pc = g_batch[a_i];
+			pc.TakeOut();
+			hc::Tier t = pc.tier;
+			const bool raw = pc.cooked <= 0.0 ? true : pc.raw;
+			if (!g_tray[a_i].made && !raw) {
+				t = Careless(t);
+			}
+			FillSlot(a_k, raw ? hc::Tier::Burnt : t, raw);
+			g_slots[a_k].mushy = !g_tray[a_i].made;
+			g_slots[a_k].piece = a_i;
+			g_tray[a_i].st = TraySt::Plated;
+		}
+
+		// "Finish the dish": everything as it is now, onto the plates; what never cooked comes out raw
+		void FinishNow()
+		{
+			if (g_served || !g_recipe) {
+				return;
+			}
+			auto nextFree = [&]() {
+				for (int k = 0; k < static_cast<int>(g_slots.size()); ++k) {
+					if (g_slots[k].count < PerSlot()) {
+						return k;
+					}
+				}
+				return -1;
+			};
+			if (g_flow == hc::Flow::Oven) {
+				for (int i = 0; i < static_cast<int>(g_tray.size()); ++i) {
+					if (g_tray[i].st == TraySt::Plated) {
+						continue;
+					}
+					const int k = nextFree();
+					if (k < 0) {
+						break;
+					}
+					if (g_tray[i].st == TraySt::Current) {
+						g_tray[i].made = false;
+					}
+					PlatePieceQuiet(i, k);
+				}
+				if (g_tray.empty()) {
+					for (int k = nextFree(); k >= 0; k = nextFree()) {
+						FillSlot(k, hc::Tier::Burnt, true);  // (never cut, never made)
+					}
+				}
+			} else if (g_flow == hc::Flow::Pot) {
+				const bool food = g_chunks.CountIn(hc::Chunks::State::Pot) + g_tossedIn > 0;
+				for (int k = nextFree(); k >= 0; k = nextFree()) {
+					bool           raw = true;
+					const hc::Tier t = food ? g_timer.TierNow(raw) : hc::Tier::Burnt;
+					FillSlot(k, t, food ? raw : true);
+				}
+			} else {
+				for (auto& u : g_units) {
+					if (u.role != Role::Meat || u.servedSlot >= 0) {
+						continue;
+					}
+					int k = (std::min)(u.dish, static_cast<int>(g_slots.size()) - 1);
+					if (k < 0 || g_slots[k].count >= PerSlot()) {
+						k = nextFree();
+					}
+					if (k < 0) {
+						break;
+					}
+					u.timer.TakeOut();
+					FillSlot(k, u.timer.tier, u.timer.cooked > 0.0 ? u.timer.raw : true);
+					u.servedSlot = k;
+					u.at = Unit::At::Gone;
+				}
+				for (int k = nextFree(); k >= 0; k = nextFree()) {
+					FillSlot(k, hc::Tier::Burnt, true);
+				}
+			}
+			spdlog::info("Finished early");
+			Serve();
 		}
 
 		void Drop(float mx, float my)
@@ -3375,7 +3693,14 @@ namespace Cook
 				{
 					double x = 0, y = 0;
 					const bool board = OnPlane(mx, my, kBoardTop + 1.0, x, y) && std::abs(x - L::kBoardX) < L::kBoardW * 0.5 + 1.0 && std::abs(y - L::kBoardY) < L::kBoardD * 0.5 + 1.0;
-					if (NearScreen(MouthAt(), mx, my, 6.0, 50.0f)) {
+					if (TrayFlow() && OverTray(mx, my) && CurrentPiece() >= 0 && !g_oven->InOven() && !NeedCut()) {
+						PutOnTray();
+						g_squash = 0;
+						break;
+					}
+					if (TrayFlow() && NearScreen(MouthAt(), mx, my, 6.0, 50.0f)) {
+						Toast("Onto the baking tray first; the tray goes in the oven");
+					} else if (NearScreen(MouthAt(), mx, my, 6.0, 50.0f)) {
 						Toast("Use the peel: drag it under the dough, then into the oven");
 					} else if (board && g_strokeLen > 1.2 && !g_rolled && g_doughParts > 0 && g_oven->Pie() && g_oven->Dough() >= 0.9) {
 						Toast("Pick up the rolling pin to roll it out");
@@ -3397,6 +3722,29 @@ namespace Cook
 			case Hold::Bread:
 				if (OverServe(mx, my) || SlotUnder(mx, my) >= 0) {
 					Serve();
+				}
+				break;
+			case Hold::Tray:
+				if (g_oven->InOven()) {
+					if (!NearScreen(MouthAt(), mx, my, 6.0, 50.0f)) {
+						g_oven->Unload();  // out: they stop baking
+						Audio::Take("thunk_", 0.6f);
+						Toast("Out: drag each bake onto its plate");
+					}
+				} else if (NearScreen(MouthAt(), mx, my, 7.0, 60.0f)) {
+					if (g_door < 0.6) {
+						Toast("Open the oven door first");
+					} else {
+						g_oven->Load();
+						Audio::Take("thunk_", 0.6f);
+					}
+				}
+				break;
+			case Hold::TrayItem:
+				if (ui >= 0 && ui < static_cast<int>(g_tray.size())) {
+					if (const int k = SlotUnder(mx, my); k >= 0) {
+						PlatePiece(ui, k);
+					}
 				}
 				break;
 			default:
@@ -3688,14 +4036,10 @@ namespace Cook
 				g_oven->Step(dt * kOvenSpeed, g_fire.Heat());
 				g_timer.in = g_oven->InOven();
 				g_timer.Step(dt, hc::timing::Rate(g_fire.Logs()));
-				if (g_batch.empty() && ServeCount() > 1 && !FlourRecipe()) {
-					g_batch.assign(ServeCount(), hc::timing::Piece{});
-					for (auto& pc : g_batch) {
-						pc.time = g_timer.time;
-					}
-				}
-				for (auto& pc : g_batch) {
-					pc.in = g_oven->InOven();
+				for (int i = 0; i < static_cast<int>(g_batch.size()); ++i) {
+					auto&      pc = g_batch[i];
+					const bool onTray = i < static_cast<int>(g_tray.size()) && (g_tray[i].st == TraySt::OnTray || g_tray[i].st == TraySt::Waiting);
+					pc.in = g_oven->InOven() && onTray;
 					pc.Step(dt, hc::timing::Rate(g_fire.Logs()));
 				}
 				if (g_timer.in || g_oven->Out()) {
@@ -3704,7 +4048,7 @@ namespace Cook
 				for (int k = 0; k < 4; ++k) {
 					g_fold[k] += Clamp(g_foldWant[k] - g_fold[k], -dt * 3.0, dt * 2.2);
 				}
-				if (g_topping && !g_doughOnBoard && DoughReady()) {
+				if (g_topping && !g_doughOnBoard && DoughReady() && (!TrayFlow() || CurrentPiece() >= 0)) {
 					g_doughOnBoard = true;  // the topped bread is what the peel takes
 					if (const int b = BreadUnit(); b >= 0) {
 						g_units[b].at = Unit::At::Dough;  // (the dish's own shape stands for the slices now)
@@ -4794,7 +5138,7 @@ namespace Cook
 				}
 			}
 			if (g_oven) {
-				const bool baking = g_oven->InOven() || (g_peelT >= 0 && g_peelIn);
+				const bool baking = !TrayFlow() && (g_oven->InOven() || (g_peelT >= 0 && g_peelIn));
 				Vec3       at = g_doughAt;
 				if (g_hold == Hold::Dough && g_strokeLen > 0 && !board_kneading()) {
 					at = { g_carry.x, g_carry.y, kBoardTop + 4.0 };
@@ -4817,7 +5161,7 @@ namespace Cook
 				}
 				// ready for the oven: it takes the shape of what it'll be (raw); in the oven and after, the dish itself
 				const bool ready = DoughReady();
-				const bool showDish = baking || g_hold == Hold::Bread || g_peelBread || ready;
+				const bool showDish = baking || g_hold == Hold::Bread || g_peelBread || (ready && (!TrayFlow() || CurrentPiece() >= 0));
 				if (showDish && P.result < 0 && g_recipe) {
 					P.result = AddResult();
 				}
@@ -4910,7 +5254,7 @@ namespace Cook
 						auto& lk = Scene::LookOf(P.dough);
 						const float smooth = static_cast<float>(Clamp(g_oven->Dough(), 0.0, 1.0));
 						lk.tint[0] = lk.tint[1] = lk.tint[2] = 0.88f + 0.12f * smooth;
-						if (!g_cuts.empty()) {
+						if (!g_cuts.empty() && !g_batchCut) {
 							// our version: the cuts made so far, the pieces eased apart
 							const Scene::Look   base = lk;  // (a copy: adding props may move the looks)
 							std::vector<double> c = g_cuts;
@@ -5097,6 +5441,80 @@ namespace Cook
 				}
 			}
 			// ---- our version: each portion ladled into its own bowl (the game's dish, in place of the empty bowl)
+			// ---- our version: the baking tray, and the pieces on it (raw dough, or the bake taking colour)
+			if (TrayFlow() && P.tray >= 0 && g_oven) {
+				if (P.peel >= 0) {
+					Scene::Hide(P.peel, true);
+				}
+				Vec3       mn, mx;
+				const Vec3 tat = TrayAt();
+				if (Scene::Bounds(P.tray, mn, mx)) {
+					const double W = TrayWidth(), D = 6.0, Hh = 0.35;
+					const double sx = W / (std::max)(0.1, mx.x - mn.x), sy = D / (std::max)(0.1, mx.y - mn.y), sz = Hh / (std::max)(0.05, mx.z - mn.z);
+					Scene::Place(P.tray, tat - Vec3{ (mn.x + mx.x) * 0.5 * sx, (mn.y + mx.y) * 0.5 * sy, mn.z * sz }, {}, 1.0f);
+					Scene::Stretch(P.tray, static_cast<float>(sx), static_cast<float>(sy), static_cast<float>(sz));
+					auto& tl = Scene::LookOf(P.tray);
+					tl.tint[0] = 0.34f, tl.tint[1] = 0.32f, tl.tint[2] = 0.31f;  // dark iron
+					Scene::Hide(P.tray, g_served);
+				}
+				P.trayRaw.resize(g_tray.size(), -1);
+				P.trayDish.resize(g_tray.size(), -1);
+				const int n = ServeCount();
+				for (int i = 0; i < static_cast<int>(g_tray.size()); ++i) {
+					const auto& t = g_tray[i];
+					auto&       rawId = P.trayRaw[i];
+					auto&       dishId = P.trayDish[i];
+					const bool  held = g_hold == Hold::TrayItem && g_holdUnit == i;
+					const bool  shown = t.st == TraySt::Waiting || t.st == TraySt::OnTray;
+					const bool  asDish = t.st == TraySt::OnTray && t.made;
+					const Vec3  spot = held ? g_carry : TraySpot(i);
+					const double br = i < static_cast<int>(g_batch.size()) ? TimerLookOf(g_batch[i], 0.85, 1.2, 1.6) : 0.0;
+					const double f = std::cbrt((std::max)(0.15, t.size * n));
+					if (rawId >= 0) {
+						Scene::Hide(rawId, true);
+					}
+					if (dishId >= 0) {
+						Scene::Hide(dishId, true);
+					}
+					if (!shown || g_served) {
+						continue;
+					}
+					if (asDish) {
+						if (dishId < 0) {
+							dishId = AddResult();
+						}
+						if (dishId >= 0 && Scene::Bounds(dishId, mn, mx)) {
+							const double big = (std::max)(mx.x - mn.x, mx.y - mn.y);
+							const double target = (n > 1 ? (std::min)(BakeSize(), TraySpacing() * 0.95) : BakeSize()) * f;
+							const double sc = target / (std::max)(0.1, big);
+							const Vec3   c{ (mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z };
+							Scene::Place(dishId, spot - c * sc, {}, static_cast<float>(sc));
+							Scene::Stretch(dishId, 1.0f, 1.0f, 1.0f);
+							auto& lk = Scene::LookOf(dishId);
+							lk.cookMode = 1;
+							lk.cook[0] = static_cast<float>(br > 1.2 ? (br - 1.2) * 1.6 : 0.0);
+							lk.lift[0] = 0.94f, lk.lift[1] = 0.86f, lk.lift[2] = 0.7f;
+							lk.lift[3] = -static_cast<float>(Clamp(0.85 - br * 0.9, 0.0, 0.85));
+							Scene::Hide(dishId, false);
+						}
+					} else {
+						if (rawId < 0) {
+							rawId = Add("Dough");
+						}
+						if (rawId >= 0) {
+							const double r = (n > 1 ? (std::min)(1.6, TraySpacing() * 0.45) : 2.4) * f;
+							const double zs = t.st == TraySt::OnTray ? 0.45 : 0.6;  // put down unmade: slumped
+							Scene::Place(rawId, spot + Vec3{ 0, 0, r * zs + 0.05 }, {}, static_cast<float>(r));
+							Scene::Stretch(rawId, 1.2f, 1.2f, static_cast<float>(zs));
+							auto& lk = Scene::LookOf(rawId);
+							DoughLook(lk);
+							lk.cookMode = 1;
+							lk.cook[0] = static_cast<float>(br * 0.9);
+							Scene::Hide(rawId, false);
+						}
+					}
+				}
+			}
 			if ((g_flow == hc::Flow::Pot || g_flow == hc::Flow::Oven) && ServeCount() > 1) {
 				P.slotDish.resize(g_slots.size(), -1);
 				for (int k = 0; k < static_cast<int>(g_slots.size()); ++k) {
@@ -5122,13 +5540,17 @@ namespace Cook
 					const bool   oven = g_flow == hc::Flow::Oven;
 					// a bake by its piece's size: a small piece smaller on its plate
 					double       f = 1.0;
-					if (oven && k < static_cast<int>(g_batch.size()) && g_timer.time > 0.0) {
-						f = Clamp(std::sqrt(g_batch[k].time / g_timer.time), 0.6, 1.3);
+					const int pi = g_slots[k].piece >= 0 ? g_slots[k].piece : k;
+					if (oven && pi < static_cast<int>(g_batch.size()) && g_timer.time > 0.0) {
+						f = Clamp(std::sqrt(g_batch[pi].time / g_timer.time), 0.6, 1.3);
 					}
 					const double sc = (oven ? BakeSize() * 0.8 * f : 7.5) / (std::max)(0.1, big);
 					const Vec3   c{ (mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z };
 					const Quat   q = RotZ(0.6 * k);
 					Scene::Place(id, SlotAt(k) + Vec3{ 0, 0, oven ? 0.45 : 0.0 } - q.Rotate(c) * sc, q, static_cast<float>(sc));
+					// made carelessly: slumped, spread and flattened
+					const bool mushy = g_slots[k].mushy;
+					Scene::Stretch(id, mushy ? 1.3f : 1.0f, mushy ? 1.25f : 1.0f, mushy ? 0.5f : 1.0f);
 					auto& lk = Scene::LookOf(id);
 					lk.lift[3] = 0.0f;
 					lk.fx[2] = 0.0f;
@@ -5299,6 +5721,20 @@ namespace Cook
 					break;
 				case Act::AbandonNo:
 					g_confirm = false;
+					break;
+				case Act::FinishAsk:
+					if (g_phase == Phase::Cooking && !g_served) {
+						g_confirmFinish = true;
+					}
+					break;
+				case Act::FinishYes:
+					g_confirmFinish = false;
+					if (g_phase == Phase::Cooking) {
+						FinishNow();
+					}
+					break;
+				case Act::FinishNo:
+					g_confirmFinish = false;
 					break;
 				case Act::Again:
 					Audio::StopAll();
@@ -5599,11 +6035,20 @@ namespace Cook
 					}
 				}
 				s.push_back({ "Firewood into the oven", g_fire.Logs() > 0 || (g_oven && (g_oven->InOven() || g_oven->Out())) });
-				s.push_back({ "Into the oven with the peel", g_oven && (g_oven->InOven() || g_oven->Out()) });
+				if (TrayFlow()) {
+					bool allOn = !g_tray.empty();
+					for (const auto& t : g_tray) {
+						allOn &= t.st == TraySt::OnTray || t.st == TraySt::Plated;
+					}
+					s.push_back({ ServeCount() > 1 ? "Each piece made up and onto the tray" : "Onto the baking tray", allOn });
+					s.push_back({ "The tray into the oven", g_oven && (g_oven->InOven() || g_oven->Out()) });
+				} else {
+					s.push_back({ "Into the oven with the peel", g_oven && (g_oven->InOven() || g_oven->Out()) });
+				}
 				s.push_back({ "Close the oven door", g_doorShut });
 				s.push_back({ "Bake it golden", g_oven && g_oven->Brown() >= 0.85 });
 				s.push_back({ "Open the oven door", g_doorReopened });
-				s.push_back({ "Out with the peel onto the plate", g_served });
+				s.push_back({ TrayFlow() ? "The tray out, each bake onto its plate" : "Out with the peel onto the plate", g_served });
 			}
 			return s;
 		}
@@ -5644,6 +6089,10 @@ namespace Cook
 				return "Over the dough: it tips and pours";
 			case Hold::Peel:
 				return g_peelBread ? "Onto the plate" : g_peelLoaded ? "Into the open oven" : g_oven && g_oven->InOven() ? "Into the open oven to take it out" : "Slide it under the dough";
+			case Hold::Tray:
+				return g_oven && g_oven->InOven() ? "Out of the oven: anywhere on the hearth" : "Into the open oven's mouth";
+			case Hold::TrayItem:
+				return "Onto a plate";
 			case Hold::Spread:
 				return "Spread it out to the edge";
 			case Hold::Crimp:
@@ -6186,7 +6635,7 @@ namespace Cook
 					if (g_pot->Burn() > 0.25) {
 						warn = "Catching on the bottom: stir!";
 					}
-				} else if (g_flow == hc::Flow::Oven && g_oven && g_oven->InOven()) {
+				} else if (g_flow == hc::Flow::Oven && g_oven && (g_oven->InOven() || (g_oven->Out() && Left(TraySt::OnTray) + Left(TraySt::Waiting) > 0))) {
 					show = true;
 					at = { L::kOvenX + 8.0, L::kOvenY - 2.0, OvenFloor() + 6.0 };
 				}
@@ -6195,8 +6644,12 @@ namespace Cook
 					bool  raw = false;
 					if (Scene::Project(at, sx, sy)) {
 						if (g_flow == hc::Flow::Oven && !g_batch.empty()) {
+							int shownBars = 0;
 							for (int i = 0; i < static_cast<int>(g_batch.size()); ++i) {
-								TimerBar(dl, sx + S(70) * static_cast<float>(i), sy, g_batch[i], rate);
+								if (i < static_cast<int>(g_tray.size()) && g_tray[i].st != TraySt::OnTray && g_tray[i].st != TraySt::Waiting) {
+									continue;
+								}
+								TimerBar(dl, sx + S(70) * static_cast<float>(shownBars++), sy, g_batch[i], rate);
 								glow |= g_batch[i].TierNow(raw) == hc::Tier::Masterwork;
 							}
 						} else {
@@ -6351,7 +6804,7 @@ namespace Cook
 				if (g_recipe && g_recipe->pie) {
 					lines.push_back("Drag the bowl of filling over the dough to heap it on. A dumpling: take each side of the dough and draw it in over the filling. A pie: pinch round the edge to crimp it.");
 				}
-				lines.push_back("Open the door (drag it left). Drag the peel under the dough, carry it into the mouth, shut the door. Peek, but each peek lets the heat out.");
+				lines.push_back("Drag the dough onto the baking tray in front of the oven. With several, cut the dough with the knife; make each piece up in turn and put it on the tray, then take up the next. Open the door (drag it left), drag the tray into the mouth, shut the door. Drag it out when you will, then each bake onto its plate. Whatever goes on the tray not made up still bakes, misshapen.");
 			}
 			lines.push_back("The hourglass and its counter show the seconds left. Take it off in the very second it reaches zero for a masterwork; every second after makes it worse, and past seven it burns. Each log burns 20 seconds; while one burns it cooks, more logs cook a little faster. The station's firewood runs out, then your own pack's.");
 			float h = S(80);
@@ -6365,6 +6818,40 @@ namespace Cook
 			float yy = y + S(64);
 			for (const auto& l : lines) {
 				yy += Para(dl, F.sans, x + S(32), yy, w - S(64), kGrey, l) + S(10);
+			}
+			ImGui::End();
+		}
+
+		// Our version: "Finish dish" (bottom right) and its question
+		void FinishButton(float W, float H)
+		{
+			if (g_served) {
+				return;
+			}
+			BeginArea("##finish", ImVec2(W - S(300), H - S(150)), ImVec2(S(280), S(60)));
+			if (MenuButton("finish", "Finish dish", W - S(160), H - S(140))) {
+				Post(Act::FinishAsk);
+			}
+			ImGui::End();
+		}
+
+		void FinishBox(float W, float H)
+		{
+			const float w = S(520), h = S(180), x = W * 0.5f - w * 0.5f, y = H * 0.36f;
+			BeginArea("##finishbox", ImVec2(x, y), ImVec2(w, h));
+			auto* dl = ImGui::GetWindowDrawList();
+			MsgBox(dl, ImVec2(x, y), ImVec2(x + w, y + h));
+			TextC(dl, F.menu, W * 0.5f, y + S(28), kTrimBright, "FINISH THE DISH NOW?", 0.2f);
+			TextC(dl, F.sans, W * 0.5f, y + S(68), kGrey, "Everything is served as it is. What isn't ready comes out raw.");
+			switch (MenuButtons("finishq", { { "Finish it", true }, { "Keep cooking", false } }, W * 0.5f, y + h - S(58))) {
+			case 0:
+				Post(Act::FinishYes);
+				break;
+			case 1:
+				Post(Act::FinishNo);
+				break;
+			default:
+				break;
 			}
 			ImGui::End();
 		}
@@ -6744,8 +7231,12 @@ namespace Cook
 			RecipeCard(W, H);
 			Meter();
 			HintLine(W, H);
+			FinishButton(W, H);
 			if (g_confirm) {
 				ConfirmBox(W, H);
+			}
+			if (g_confirmFinish) {
+				FinishBox(W, H);
 			}
 			break;
 		case Phase::Result:

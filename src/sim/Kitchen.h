@@ -328,6 +328,15 @@ namespace hc
 		bool   Pie() const { return _pie; }
 		bool   HasDough() const { return _dough; }
 
+		void   ResetShape()  // our version: the next piece cut from the batch's dough, to fill and close afresh
+		{
+			for (auto& s : _sector) {
+				s = false;
+			}
+			for (auto& c : _crimp) {
+				c = false;
+			}
+		}
 		void   Load() { _inOven = true; }
 		void   Unload() { _inOven = false; _out = true; }
 		void   SetDoor(bool a_open) { if (a_open && !_door) ++_peeks; _door = a_open; }
