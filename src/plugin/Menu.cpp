@@ -72,7 +72,7 @@ namespace Menu
 			}
 			UI::SeparatorText("Controls and sound");
 			Changed(UI::SliderFloat("Mouse speed", &v.mouseSpeed, 0.2f, 3.0f, "%.2f"));
-			Changed(UI::SliderFloat("Interface size", &v.uiScale, 0.6f, 1.6f, "%.2f"));
+			Changed(UI::SliderFloat("Interface size", &v.uiScale, 0.6f, 2.0f, "%.2f"));
 			Changed(UI::Checkbox("Sound", &v.sound));
 			Changed(UI::SliderFloat("Kitchen sounds", &v.volume, 0.0f, 2.0f, "%.2f"));
 			Changed(UI::SliderFloat("Fire and simmer", &v.ambience, 0.0f, 2.0f, "%.2f"));

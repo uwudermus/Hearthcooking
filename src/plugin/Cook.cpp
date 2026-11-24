@@ -147,6 +147,8 @@ namespace Cook
 			bool                      dice = false;       // the oven: cut on the board first, then into the bowl
 			bool                      byBowl = false;     // a sauce's liquid poured into its bowl: the bottle stood beside it
 			bool                      bulb = false;       // a head of garlic: broken into its cloves (a knock of the knife) before it's diced
+			hc::timing::Piece         timer;              // our version: a meat on the spit cooks to its own time
+			int                       dish = 0;           // which portion it's for
 		};
 
 		// A piece: the ingredient's own mesh cut to a box (x along its length, y across, z up; about its middle, at the
@@ -387,6 +389,8 @@ namespace Cook
 		hc::timing::Piece g_timer;
 		int    g_stationLogs = 0;   // the station's own logs left (2..5 at the start)
 		int    g_invLogsUsed = 0;   // firewood from the player's pack put on the fire (taken when the dish is served)
+		int    g_portions = 1;      // how many dishes at once (the recipe book's slider)
+		std::vector<std::pair<hc::Tier, bool>> g_portionTiers;  // each portion as it came off the fire (tier, raw)
 
 		RE::TESBoundObject* Firewood() { return RE::TESForm::LookupByID<RE::TESBoundObject>(0x0006F993); }  // Skyrim.esm Firewood01
 
@@ -452,9 +456,29 @@ namespace Cook
 
 		// How done the dish looks for the timer: the station's own scale, raw .. its gold window (lo..hi) at T..T+4
 		// .. as burnt as the station shows it at T+7, and on past that
-		double TimerLook(double a_lo, double a_hi, double a_burnt)
+		// How many at once: no more than the ingredients carried; the spit takes 4 meats, the pot 5 bowls; the oven one
+		// for now (its batches come with cutting the dough)
+		int MaxPortions(const Recipes::Recipe& a_r)
 		{
-			const double c = g_timer.cooked, T = g_timer.time;
+			int most = 1;
+			if (a_r.flow == hc::Flow::Spit) {
+				int meats = 0;
+				for (const auto& in : a_r.ings) {
+					meats += in.role == Recipes::Role::Meat ? in.count : 0;
+				}
+				most = (std::max)(1, hc::timing::kSpitMax / (std::max)(1, meats));
+			} else if (a_r.flow == hc::Flow::Pot) {
+				most = hc::timing::kPotMax;
+			}
+			return std::clamp((std::min)(most, Recipes::CanMake(a_r)), 1, most);
+		}
+
+		double TimerLookOf(const hc::timing::Piece& a_p, double a_lo, double a_hi, double a_burnt);
+		double TimerLook(double a_lo, double a_hi, double a_burnt) { return TimerLookOf(g_timer, a_lo, a_hi, a_burnt); }
+
+		double TimerLookOf(const hc::timing::Piece& a_p, double a_lo, double a_hi, double a_burnt)
+		{
+			const double c = a_p.cooked, T = a_p.time;
 			if (T <= 0.0) {
 				return 0.0;
 			}
@@ -487,7 +511,8 @@ namespace Cook
 			Done,
 			Help,
 			Mute,
-			Knife
+			Knife,
+			Portions
 		};
 		bool board_kneading();
 		void NextKnife();
@@ -1176,8 +1201,10 @@ namespace Cook
 				if (in.role == Role::Salt) {
 					continue;
 				}
-				for (int c = 0; c < in.count && static_cast<int>(g_units.size()) < kMaxUnits; ++c) {
+				const int reps = g_flow == hc::Flow::Spit && in.role == Role::Meat ? g_portions : 1;
+				for (int c = 0; c < in.count * reps && static_cast<int>(g_units.size()) < kMaxUnits; ++c) {
 					Unit u;
+					u.dish = c / (std::max)(1, in.count);
 					u.ing = i;
 					u.role = in.role;
 					u.name = in.name;
@@ -1537,6 +1564,8 @@ namespace Cook
 			g_fire.Light(0);  // every fire starts cold: firewood goes in (the pot's once everything's in it)
 			g_timer = {};
 			g_timer.time = BaseTime(*a_r);
+			g_portions = std::clamp(g_portions, 1, MaxPortions(*a_r));
+			g_portionTiers.clear();
 			g_stationLogs = hc::timing::StartLogs(static_cast<unsigned>(std::rand()) ^ static_cast<unsigned>(g_clock * 1000.0));
 			g_invLogsUsed = 0;
 			spdlog::info("{}: {:.0f} s with one log; the station has {} logs, the pack {}", a_r->name, g_timer.time, g_stationLogs, PackLogs());
@@ -1687,29 +1716,79 @@ namespace Cook
 				g_oven->Unload();
 				g_result = g_oven->Score();
 			}
-			// our version: the old lines stay as advice, the tier is the second it came off the fire
-			g_timer.TakeOut();
+			// our version: each portion's tier is the second it came off the fire; the old lines stay as advice
+			if (g_flow == hc::Flow::Spit) {
+				g_portionTiers.clear();
+				for (int d = 0; d < g_portions; ++d) {
+					hc::Tier t = hc::Tier::Masterwork;
+					bool     raw = false, any = false;
+					for (const auto& u : g_units) {
+						if (u.role != Role::Meat || u.dish != d) {
+							continue;
+						}
+						any = true;
+						const hc::Tier ut = u.timer.out ? u.timer.tier : hc::Tier::Burnt;
+						const bool     ur = u.timer.out ? u.timer.raw : true;
+						if (ut < t || (ut == t && ur)) {
+							t = ut;
+							raw = ur;
+						}
+					}
+					if (any) {
+						g_portionTiers.emplace_back(t, raw);
+					}
+				}
+			}
+			if (g_portionTiers.empty()) {
+				g_timer.TakeOut();
+				g_portionTiers.emplace_back(g_timer.tier, g_timer.raw);
+			}
+			const int n = static_cast<int>(g_portionTiers.size());
 			{
-				const double over = g_timer.cooked - g_timer.time;
-				const char*  v = g_timer.raw ? "Taken off raw" :
-				                 g_timer.tier == hc::Tier::Masterwork ? "On the very second" :
-				                 g_timer.tier == hc::Tier::Hearty ? "A moment late" :
-				                 g_timer.tier == hc::Tier::Plain ? "Left a while" : "Left far too long";
-				const double sc = g_timer.raw ? 0.0 : over < hc::timing::kMasterWin ? 1.0 : (std::max)(0.0, 1.0 - over / hc::timing::kPlainEnd);
+				auto verdict = [](hc::Tier t, bool raw) {
+					return raw ? "Raw: taken off too soon" : t == hc::Tier::Masterwork ? "Masterwork: on the very second" :
+					             t == hc::Tier::Hearty ? "Hearty: a moment late" : t == hc::Tier::Plain ? "Plain: left a while" : "Burnt: left far too long";
+				};
+				auto score = [](hc::Tier t, bool raw) {
+					return raw ? 0.0 : t == hc::Tier::Masterwork ? 1.0 : t == hc::Tier::Hearty ? 0.75 : t == hc::Tier::Plain ? 0.5 : 0.1;
+				};
+				static const char* kLabels[] = { "Portion 1", "Portion 2", "Portion 3", "Portion 4", "Portion 5" };
 				hc::Result r;
-				r.lines[r.count++] = { "The timing", v, sc };
+				hc::Tier   best = hc::Tier::Burnt;
+				bool       bestRaw = true;
+				double     q = 0.0;
+				for (int i = 0; i < n; ++i) {
+					const auto [t, raw] = g_portionTiers[i];
+					if (t > best || (t == best && !raw)) {
+						best = t;
+						bestRaw = raw;
+					}
+					q += score(t, raw);
+					if (r.count < 5) {
+						r.lines[r.count++] = { n == 1 ? "The timing" : kLabels[i], verdict(t, raw), score(t, raw) };
+					}
+				}
 				for (int i = 0; i < g_result.count && r.count < 8; ++i) {
 					r.lines[r.count++] = g_result.lines[i];
 				}
-				r.quality = sc;
-				r.tier = g_timer.tier;
-				r.burntWhy = g_timer.raw ? "It came off the fire raw" : "It stayed on past its time";
+				r.quality = q / (std::max)(1, n);
+				r.tier = best;
+				r.burntWhy = bestRaw ? "It came off the fire raw" : "It stayed on past its time";
 				g_result = r;
 			}
 			TakePackLogs();
-			Recipes::Consume(*g_recipe);
-			g_given = Recipes::Give(*g_recipe, g_result.tier);
+			g_given = nullptr;
+			for (const auto& [t, raw] : g_portionTiers) {
+				Recipes::Consume(*g_recipe);
+				auto* gv = Recipes::Give(*g_recipe, t);
+				if (!g_given) {
+					g_given = gv;
+				}
+			}
 			g_givenName = g_given && g_given->GetName() ? g_given->GetName() : g_recipe->name;
+			if (n > 1) {
+				g_givenName = fmt::format("{} portions of {}", n, g_recipe->name);
+			}
 			g_burntLook = g_result.tier == hc::Tier::Burnt;
 			g_phase = Phase::Result;
 			g_serveAt = g_clock;
@@ -1978,6 +2057,40 @@ namespace Cook
 				n += u.at == Unit::At::Spit;
 			}
 			return n;
+		}
+
+		int MeatCount()
+		{
+			int n = 0;
+			for (const auto& u : g_units) {
+				n += u.role == Role::Meat;
+			}
+			return n;
+		}
+
+		// how long a meat lies along the spit: shorter when it shares it
+		double MeatLen(const Unit& u)
+		{
+			const int n = MeatCount();
+			return Clamp(u.dims[0] * 0.5, 4.0, n > 2 ? 5.0 : n > 1 ? 7.0 : 9.0);
+		}
+
+		// a free place along the rod, spread for however many meats there are
+		double FreeSpitSpot(const Unit* a_self)
+		{
+			static constexpr double k1[1] = { 0.0 }, k2[2] = { -4.0, 4.0 }, k3[3] = { -6.0, 0.0, 6.0 }, k4[4] = { -7.5, -2.5, 2.5, 7.5 };
+			const int     n = (std::min)(4, (std::max)(1, MeatCount()));
+			const double* spots = n == 1 ? k1 : n == 2 ? k2 : n == 3 ? k3 : k4;
+			for (int k = 0; k < n; ++k) {
+				bool used = false;
+				for (const auto& o : g_units) {
+					used |= &o != a_self && o.at == Unit::At::Spit && std::abs(o.spitX - spots[k]) < 0.5;
+				}
+				if (!used) {
+					return spots[k];
+				}
+			}
+			return 0.0;
 		}
 
 		// ---------------------------------------------------------------- particles
@@ -2767,11 +2880,18 @@ namespace Cook
 								PutBack(ui);
 								break;
 							}
-							int n = Mounted();
+							if (Mounted() >= hc::timing::kSpitMax) {
+								Toast("The spit is full");
+								PutBack(ui);
+								break;
+							}
 							u.at = Unit::At::Spit;
 							Fit(u);
-							static constexpr double kSpots[3] = { 0.0, -5.0, 5.0 };
-							u.spitX = kSpots[(std::min)(n, 2)];
+							u.spitX = FreeSpitSpot(&u);
+							if (u.timer.cooked <= 0.0) {
+								u.timer.time = g_timer.time;  // its own clock from now
+							}
+							u.timer.in = true;
 							Audio::Take("log_", 0.3f);
 							break;
 						}
@@ -2972,7 +3092,15 @@ namespace Cook
 				if (OverServe(mx, my)) {
 					if (g_chunks.CountIn(hc::Chunks::State::Pot) + g_tossedIn > 0) {
 						Audio::Take("splash_", 0.6f);
-						Serve();
+						bool           raw = false;
+						const hc::Tier t = g_timer.TierNow(raw);
+						g_portionTiers.emplace_back(t, raw);
+						if (static_cast<int>(g_portionTiers.size()) >= g_portions) {
+							Serve();
+						} else {
+							Toast(fmt::format("Bowl {} of {}: {}", g_portionTiers.size(), g_portions, raw ? "Raw" : hc::TierName(t)));
+							Audio::Play({ t == hc::Tier::Burnt ? "burnt" : "done", 0.6f });
+						}
 					} else {
 						Toast("There's nothing in the pot yet");
 					}
@@ -3018,8 +3146,21 @@ namespace Cook
 				}
 				break;
 			case Hold::Meat:
-				if (OverServe(mx, my)) {
-					Serve();
+				if (OverServe(mx, my) && g_holdUnit >= 0) {
+					auto& u = g_units[g_holdUnit];
+					u.timer.TakeOut();
+					u.at = Unit::At::Gone;
+					Scene::Hide(u.prop, true);
+					bool left = false;
+					for (const auto& o : g_units) {
+						left |= o.role == Role::Meat && (o.at == Unit::At::Spit || o.at == Unit::At::Cloth || o.at == Unit::At::Held);
+					}
+					if (!left) {
+						Serve();
+					} else {
+						Toast(fmt::format("{}: {}", u.name, u.timer.raw ? "Raw" : hc::TierName(u.timer.tier)));
+						Audio::Play({ u.timer.tier == hc::Tier::Burnt ? "burnt" : "done", 0.6f });
+					}
 				}
 				break;
 			case Hold::Peel:
@@ -3333,10 +3474,14 @@ namespace Cook
 			if (g_flow == hc::Flow::Spit && g_spit) {
 				const int m = Mounted();
 				g_spit->Step(dt * kSpitSpeed, g_fire.Heat(), m > 0);
-				g_timer.in = m > 0;
-				g_timer.Step(dt, hc::timing::Rate(g_fire.Logs()));
-				if (g_timer.cooked > 0.0) {
-					g_spit->SetMean(TimerLook(0.9, 1.3, 1.7));
+				const double rate = hc::timing::Rate(g_fire.Logs());
+				for (int i = 0; i < static_cast<int>(g_units.size()); ++i) {
+					auto& u = g_units[i];
+					if (u.role != Role::Meat || u.timer.out) {
+						continue;
+					}
+					u.timer.in = u.at == Unit::At::Spit && !(g_hold == Hold::Meat && g_holdUnit == i);  // (not while it's in the hand)
+					u.timer.Step(dt, rate);
 				}
 			}
 			if (g_flow == hc::Flow::Oven && g_oven) {
@@ -3867,8 +4012,9 @@ namespace Cook
 					break;
 				case Unit::At::Spit:
 					{
-						const double len = Clamp(u.dims[0] * 0.5, 5.0, 9.0);
+						const double len = MeatLen(u);
 						const double a = g_spit ? g_spit->Angle() : 0.0;
+						const double own = TimerLookOf(u.timer, 0.9, 1.3, 1.7);
 						Lay(u, SpitAxis(u.spitX), len, RotX(a));
 						auto& lk = Scene::LookOf(u.prop);
 						lk.cookMode = 2;
@@ -3879,11 +4025,11 @@ namespace Cook
 							lk.sear = ln.find("chicken") == std::string::npos;
 						}
 						for (int b = 0; b < hc::Spit::kBands; ++b) {
-							lk.cook[b] = static_cast<float>(g_spit->Band(b));
+							lk.cook[b] = static_cast<float>((std::max)(0.0, g_spit->Band(b) - g_spit->Mean() + own));
 						}
 						// its fat running as it roasts: glistening, browning unevenly
 						{
-							const double m = g_spit->Mean();
+							const double m = own;
 							lk.fx[3] = static_cast<float>(Clamp((m - 0.1) * 1.6, 0.0, 1.0) * Clamp((1.7 - m) * 2.0, 0.25, 1.0));
 							lk.fx[2] = 0.7f;
 							// now and then a drop of fat off its underside, into the fire: a flare-up where it lands
@@ -3957,7 +4103,7 @@ namespace Cook
 			}
 			if (g_hold == Hold::Meat && g_holdUnit >= 0) {
 				auto&        u = g_units[g_holdUnit];
-				const double len = Clamp(u.dims[0] * 0.5, 5.0, 9.0);
+				const double len = MeatLen(u);
 				Lay(u, g_carry, len, RotX(g_spit ? g_spit->Angle() : 0.0));
 			}
 
@@ -4798,6 +4944,10 @@ namespace Cook
 				switch (act) {
 				case Act::Select:
 					g_sel = arg;
+					g_portions = 1;
+					break;
+				case Act::Portions:
+					g_portions = (std::max)(1, arg);
 					break;
 				case Act::CookByHand:
 					if (g_phase == Phase::Book && g_sel >= 0 && g_sel < static_cast<int>(g_book.size())) {
@@ -5330,6 +5480,29 @@ namespace Cook
 				Text(dl, F.bookIt, ImVec2(rp.x + S(52), ry), kInkSoft, any ? fmt::format("Your best: {}", hc::TierName(best)) : "Not made by hand yet");
 				const bool can = Recipes::CanMake(*r) > 0;
 				const float by = rp.y + ph - S(118);
+				if (can) {
+					// our version: how many at once, as far as the ingredients go
+					const int   maxP = MaxPortions(*r);
+					const int   cur = std::clamp(g_portions, 1, maxP);
+					const float sy = (std::max)(ry + S(34), by - S(84));
+					Text(dl, F.bookSC, ImVec2(rp.x + S(52), sy), kInk, fmt::format("Portions: {}", cur), 0.02f);
+					const float x0 = rp.x + S(250), x1 = rp.x + pw - S(64);
+					const float ly = sy + F.bookSC->FontSize * 0.5f;
+					dl->AddLine(ImVec2(x0, ly), ImVec2(x1, ly), Alpha(kInkSoft, 0.7f), S(2));
+					for (int k = 1; k <= maxP; ++k) {
+						const float x = maxP > 1 ? x0 + (x1 - x0) * static_cast<float>(k - 1) / static_cast<float>(maxP - 1) : x0;
+						bool        hov = false;
+						const auto  id = fmt::format("portion{}", k);
+						if (Clicked(id.c_str(), ImVec2(x - S(16), ly - S(16)), ImVec2(x + S(16), ly + S(16)), &hov, true)) {
+							Post(Act::Portions, k);
+						}
+						Diamond(dl, ImVec2(x, ly), k == cur ? S(9) : S(5), k == cur ? kRubric : (hov ? kInkSoft : 0), kInk);
+						TextC(dl, F.bookIt, x, ly + S(12), k == cur ? kRubric : kInkSoft, std::to_string(k));
+					}
+					if (r->flow == hc::Flow::Oven) {
+						Text(dl, F.bookIt, ImVec2(rp.x + S(52), sy + S(30)), kInkSoft, "Oven batches come with cutting the dough");
+					}
+				}
 				if (MenuBtnInk("cook", "Cook by hand", rp.x + pw * 0.5f, by, can)) {
 					Post(Act::CookByHand);
 				}
@@ -5581,6 +5754,36 @@ namespace Cook
 			}
 		}
 
+		// The counter's words and colour for a piece at the fire as it burns now
+		std::string CounterText(const hc::timing::Piece& a_p, double a_rate, ImU32& a_col)
+		{
+			const double left = a_p.Remaining();
+			bool         raw = false;
+			const auto   now = a_p.TierNow(raw);
+			if (left > 0.0) {
+				a_col = kWhite;
+				return fmt::format("{:.1f}", a_rate > 0.0 ? left / a_rate : left);
+			}
+			a_col = now == hc::Tier::Masterwork ? IM_COL32(255, 220, 130, 255) : now == hc::Tier::Hearty ? kGold : now == hc::Tier::Plain ? IM_COL32(220, 170, 120, 255) : IM_COL32(230, 110, 90, 255);
+			return fmt::format("+{:.1f}", -left);
+		}
+
+		// A small hourglass and counter over one meat on the spit
+		void MiniTimer(ImDrawList* dl, float sx, float sy, const hc::timing::Piece& a_p, double a_rate)
+		{
+			ImU32       col = kWhite;
+			const auto  text = CounterText(a_p, a_rate, col);
+			bool        raw = false;
+			const bool  master = a_p.TierNow(raw) == hc::Tier::Masterwork;
+			const float bw = S(118), bh = S(46);
+			dl->AddRectFilled(ImVec2(sx - bw * 0.5f, sy - bh * 0.5f), ImVec2(sx + bw * 0.5f, sy + bh * 0.5f), IM_COL32(12, 10, 8, 175), S(5));
+			dl->AddRect(ImVec2(sx - bw * 0.5f, sy - bh * 0.5f), ImVec2(sx + bw * 0.5f, sy + bh * 0.5f), master ? IM_COL32(255, 214, 120, 230) : IM_COL32(170, 140, 90, 150), S(5), 0, S(master ? 2.0f : 1.2f));
+			const double left = a_p.Remaining();
+			const ImU32  sand = master ? IM_COL32(255, 214, 120, 255) : (left < 0.0 ? IM_COL32(200, 90, 60, 255) : IM_COL32(214, 180, 120, 240));
+			Hourglass(dl, ImVec2(sx - bw * 0.5f + S(20), sy), bh - S(14), a_p.time > 0.0 ? left / a_p.time : 0.0, IM_COL32(150, 112, 70, 255), sand);
+			Text(dl, F.titleMid, ImVec2(sx - bw * 0.5f + S(40), sy - F.titleMid->FontSize * 0.5f), col, text, 0.02f, 0.9f);
+		}
+
 		void Meter()
 		{
 			auto* dl = ImGui::GetForegroundDrawList();
@@ -5592,6 +5795,37 @@ namespace Cook
 					const auto t = pack > 0 ? fmt::format("Firewood {} (+{} in your pack)", g_stationLogs, pack) : fmt::format("Firewood {}", g_stationLogs);
 					TextC(dl, F.sans, px, py - S(40), LogsLeft() > 0 ? kWhite : IM_COL32(230, 150, 130, 255), t, 0.05f, 0.9f);
 				}
+			}
+			// the spit: every meat its own clock
+			if (g_flow == hc::Flow::Spit && g_spit && !g_served) {
+				const double rate = hc::timing::Rate(g_fire.Logs());
+				bool         glow = g_hold == Hold::Meat;
+				for (const auto& u : g_units) {
+					if (u.role != Role::Meat || u.at != Unit::At::Spit) {
+						continue;
+					}
+					float mx0 = 0, my0 = 0;
+					if (Scene::Project(SpitAxis(u.spitX) + Vec3{ 0, 0, 5.0 }, mx0, my0)) {
+						MiniTimer(dl, mx0, my0 - S(34), u.timer, rate);
+					}
+					bool raw = false;
+					glow |= u.timer.TierNow(raw) == hc::Tier::Masterwork;
+				}
+				if (Mounted() > 0 && rate <= 0.0) {
+					float fx = 0, fy = 0;
+					if (Scene::Project(FireCenter() + Vec3{ 0, 0, 2.0 }, fx, fy)) {
+						TextC(dl, F.sansSemi, fx, fy + S(30), IM_COL32(240, 170, 140, 255), "The fire is out: it isn't cooking", 0.05f, 0.9f);
+					}
+				}
+				if (glow) {
+					float bx = 0, by = 0;
+					if (Scene::Project({ L::kServeX, L::kServeY, 2.0 }, bx, by)) {
+						const float p = 0.5f + 0.5f * static_cast<float>(std::sin(g_clock * 4.0));
+						const float r = (std::max)(S(30), Scene::PixelsPerUnit({ L::kServeX, L::kServeY, 2.0 }) * 5.5f);
+						dl->AddCircle(ImVec2(bx, by), r + S(6) * p, IM_COL32(255, 214, 120, static_cast<int>(120 + 100 * p)), 48, S(3));
+					}
+				}
+				return;
 			}
 			Vec3        at;
 			const char* warn = nullptr;
@@ -5646,8 +5880,13 @@ namespace Cook
 			Text(dl, F.title, ImVec2(sx - bw * 0.5f + S(56), y0 - F.title->FontSize * 0.5f), col, count, 0.02f, 0.9f);
 			// under it: what the fire is doing
 			const char* line = warn ? warn : rate <= 0.0 ? "The fire is out: it isn't cooking" : nullptr;
+			float       ly = y0 + bh * 0.5f + S(6);
+			if (g_flow == hc::Flow::Pot && g_portions > 1) {
+				TextC(dl, F.sansSemi, sx, ly, kGold, fmt::format("Bowl {} of {}", g_portionTiers.size() + 1, g_portions), 0.05f, 0.9f);
+				ly += F.sansSemi->FontSize + S(4);
+			}
 			if (line) {
-				TextC(dl, F.sans, sx, y0 + bh * 0.5f + S(6), IM_COL32(240, 170, 140, 255), line, 0.05f, 0.9f);
+				TextC(dl, F.sansSemi, sx, ly, IM_COL32(240, 170, 140, 255), line, 0.05f, 0.9f);
 			}
 			// where it goes, glowing in the masterwork second
 			if (master || g_hold == Hold::LadleOut || g_hold == Hold::Meat || g_hold == Hold::Bread) {
