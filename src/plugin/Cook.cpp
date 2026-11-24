@@ -5575,6 +5575,13 @@ namespace Cook
 			Vignette(fg, W, H);
 			const float pw = S(470), ph = (std::min)(H - S(160), S(760));
 			const ImVec2 lp(W * 0.5f - pw - S(18), (H - ph) * 0.5f - S(20)), rp(W * 0.5f + S(18), lp.y);
+			// our version: the book's cover, dark leather and gold, the pages on it, a spine between them
+			Panel(fg, ImVec2(lp.x - S(30), lp.y - S(30)), ImVec2(rp.x + pw + S(30), lp.y + ph + S(30)));
+			fg->AddRectFilledMultiColor(ImVec2(W * 0.5f - S(16), lp.y - S(6)), ImVec2(W * 0.5f, lp.y + ph + S(6)), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 170),
+				IM_COL32(0, 0, 0, 170), IM_COL32(0, 0, 0, 0));
+			fg->AddRectFilledMultiColor(ImVec2(W * 0.5f, lp.y - S(6)), ImVec2(W * 0.5f + S(16), lp.y + ph + S(6)), IM_COL32(0, 0, 0, 170), IM_COL32(0, 0, 0, 0),
+				IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 170));
+			fg->AddLine(ImVec2(W * 0.5f, lp.y - S(6)), ImVec2(W * 0.5f, lp.y + ph + S(6)), Alpha(kTrim, 0.6f), S(1.5f));
 			// the left page: what can be made here
 			BeginArea("##bookL", lp, ImVec2(pw, ph));
 			auto* dl = ImGui::GetWindowDrawList();
@@ -5765,6 +5772,7 @@ namespace Cook
 			const int v0 = dl->VtxBuffer.Size;
 			dl->PushClipRect(pos, ImVec2(pos.x + w, pos.y + h), true);
 			Sheet(dl, pos, ImVec2(w, h), 0);
+			Frame(dl, ImVec2(pos.x - S(2), pos.y - S(2)), ImVec2(pos.x + w + S(2), pos.y + h + S(2)));
 			float y = pos.y + S(24);
 			Text(dl, F.bookSC, ImVec2(pos.x + S(30), y), kInk, g_recipe ? g_recipe->name : "", 0.02f);
 			y += S(42);
@@ -5939,7 +5947,7 @@ namespace Cook
 			const float  w = S(11), h = S(96);
 			const double top = a_p.time + T::kPlainEnd + 1.5;  // the scale, in cooking seconds
 			auto Y = [&](double a_s) { return yBottom - h * static_cast<float>(Clamp(a_s / top, 0.0, 1.0)); };
-			dl->AddRectFilled(ImVec2(x - w * 0.5f - S(2), Y(top) - S(2)), ImVec2(x + w * 0.5f + S(2), yBottom + S(2)), IM_COL32(12, 10, 8, 190), S(3));
+			Panel(dl, ImVec2(x - w * 0.5f - S(4), Y(top) - S(4)), ImVec2(x + w * 0.5f + S(4), yBottom + S(4)), 1.0f, false);
 			const struct
 			{
 				double from, to;
@@ -5989,7 +5997,7 @@ namespace Cook
 				if (Scene::Project(SlotAt(k) + Vec3{ 0, -5.5, 0.0 }, sx, sy)) {
 					const auto word = Upper(TierWord(sl.tier, sl.raw));
 					const float w = Measure(F.sansSemi, word, 0.1f) + S(24);
-					dl->AddRectFilled(ImVec2(sx - w * 0.5f, sy - S(2)), ImVec2(sx + w * 0.5f, sy + F.sansSemi->FontSize + S(6)), IM_COL32(12, 10, 8, 185), S(4));
+					Panel(dl, ImVec2(sx - w * 0.5f, sy - S(3)), ImVec2(sx + w * 0.5f, sy + F.sansSemi->FontSize + S(7)), 1.0f, false);
 					TextC(dl, F.sansSemi, sx, sy + S(1), TierColour(sl.tier, sl.raw), word, 0.1f, 0.9f);
 				}
 			}
@@ -6008,8 +6016,7 @@ namespace Cook
 			const ImVec2 pos(Clamp(dx - w * 0.5f, S(10), W - w - S(10)), Clamp(dy + S(40), S(10), H - h - S(90)));
 			BeginArea("##cut", pos, ImVec2(w, h));
 			auto* dl = ImGui::GetWindowDrawList();
-			dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h), IM_COL32(12, 10, 8, 200), S(8));
-			dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), IM_COL32(170, 140, 90, 170), S(8), 0, S(1.2f));
+			Panel(dl, pos, ImVec2(pos.x + w, pos.y + h));
 			TextC(dl, F.sansSemi, pos.x + w * 0.5f, pos.y + S(10), kGold, fmt::format("Cut the dough into {}: click where the knife goes", n), 0.04f, 0.9f);
 			// the dough
 			const float x0 = pos.x + S(24), x1 = pos.x + w - S(24), y0 = pos.y + S(48), y1 = pos.y + S(92);
@@ -6040,7 +6047,10 @@ namespace Cook
 				if (Clicked("cutundo", ua, ub, &uh, true)) {
 					Post(Act::CutUndo);
 				}
-				dl->AddRect(ua, ub, uh ? kGold : IM_COL32(170, 140, 90, 170), S(4));
+				Panel(dl, ua, ub, 1.0f, false);
+				if (uh) {
+					dl->AddRect(ua, ub, kTrimBright, S(2), 0, S(1.5f));
+				}
 				TextC(dl, F.sans, (ua.x + ub.x) * 0.5f, ua.y + S(4), uh ? kGold : kWhite, "Undo", 0.04f, 0.9f);
 			}
 			ImGui::End();
@@ -6068,7 +6078,7 @@ namespace Cook
 						for (int k = burning - 1; k >= 0; --k) {
 							const double f = Clamp(g_fire.Fuel(k), 0.0, 1.0);
 							by -= bh + S(4);
-							dl->AddRectFilled(ImVec2(px - bw * 0.5f - S(2), by - S(2)), ImVec2(px + bw * 0.5f + S(2), by + bh + S(2)), IM_COL32(12, 10, 8, 190), S(3));
+							Panel(dl, ImVec2(px - bw * 0.5f - S(3), by - S(3)), ImVec2(px + bw * 0.5f + S(3), by + bh + S(3)), 1.0f, false);
 							const ImU32 c = f > 0.5 ? IM_COL32(236, 150, 60, 240) : f > 0.2 ? IM_COL32(220, 110, 45, 240) : IM_COL32(200, 60, 40, 250);
 							dl->AddRectFilled(ImVec2(px - bw * 0.5f, by), ImVec2(px - bw * 0.5f + bw * static_cast<float>(f), by + bh), c, S(2));
 						}
@@ -6156,9 +6166,8 @@ namespace Cook
 			const auto  text = Upper(g_toast);
 			const float w = Measure(F.toastLong, text, 0.16f) + S(100);
 			const float y = H * 0.2f;
-			FadeRule(dl, W * 0.5f - w * 0.5f, W * 0.5f + w * 0.5f, y - S(10), 0.62f * a);
-			FadeRule(dl, W * 0.5f - w * 0.5f, W * 0.5f + w * 0.5f, y + F.toastLong->FontSize + S(10), 0.62f * a);
-			TextC(dl, F.toastLong, W * 0.5f, y, Alpha(kWhite, a), text, 0.16f, 0.9f * a);
+			Panel(dl, ImVec2(W * 0.5f - w * 0.5f, y - S(14)), ImVec2(W * 0.5f + w * 0.5f, y + F.toastLong->FontSize + S(14)), a, false);
+			TextC(dl, F.toastLong, W * 0.5f, y, Alpha(kTrimBright, a), text, 0.16f, 0.9f * a);
 		}
 
 		// M: the sounds, each with a slider (0 off, 1 as it comes, 2 twice as loud), and all of them off at once; kept
@@ -6352,7 +6361,7 @@ namespace Cook
 			}
 			const float y = H - S(150);
 			const float w = (std::max)(Measure(F.menu, Upper(g_givenName), 0.2f), Measure(F.sansSemi, sum, 0.08f)) + S(80);
-			dl->AddRectFilled(ImVec2(W * 0.5f - w * 0.5f, y - S(10)), ImVec2(W * 0.5f + w * 0.5f, y + S(58)), IM_COL32(12, 10, 8, 170), S(8));
+			Panel(dl, ImVec2(W * 0.5f - w * 0.5f, y - S(16)), ImVec2(W * 0.5f + w * 0.5f, y + S(64)));
 			TextC(dl, F.menu, W * 0.5f, y, kGold, Upper(g_givenName), 0.2f, 0.8f);
 			TextC(dl, F.sansSemi, W * 0.5f, y + S(28), kWhite, sum, 0.08f, 0.8f);
 			BeginArea("##again", ImVec2(W * 0.5f - S(300), H - S(90)), ImVec2(S(600), S(60)));
@@ -6415,6 +6424,7 @@ namespace Cook
 			BeginArea("##verdict", pos, ImVec2(w, h));
 			auto* dl = ImGui::GetWindowDrawList();
 			Sheet(dl, pos, ImVec2(w, h), 1);
+			Frame(dl, ImVec2(pos.x - S(2), pos.y - S(2)), ImVec2(pos.x + w + S(2), pos.y + h + S(2)));
 			float y = pos.y + S(24);
 			TextC(dl, F.bookSC, pos.x + w * 0.5f, y, kInk, "How it went");
 			y += S(42);

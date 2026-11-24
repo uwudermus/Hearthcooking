@@ -27,6 +27,10 @@ namespace Ui
 	inline constexpr ImU32 kInkSoft = IM_COL32(94, 70, 49, 255);
 	inline constexpr ImU32 kRubric = IM_COL32(142, 47, 27, 255);
 	inline constexpr ImU32 kGreenInk = IM_COL32(46, 84, 40, 255);
+	// our version: the dark-and-gold look (a witcher's notebook rather than a flat box)
+	inline constexpr ImU32 kTrim = IM_COL32(176, 140, 82, 255);        // worn gold
+	inline constexpr ImU32 kTrimBright = IM_COL32(236, 204, 136, 255); // gold catching the light
+	inline constexpr ImU32 kTrimDark = IM_COL32(92, 70, 40, 255);
 
 	void  Setup(float a_screenH);  // the fonts, at the screen's size
 	void  LoadArt();               // the parchment (on the render thread, once)
@@ -46,6 +50,11 @@ namespace Ui
 	void  DiamondRule(ImDrawList* a_dl, float a_cx, float a_y, float a_w);
 	void  Shadow(ImDrawList* a_dl, ImVec2 a_a, ImVec2 a_b, float a_r, float a_alpha);
 	void  MsgBox(ImDrawList* a_dl, ImVec2 a_a, ImVec2 a_b);
+	// A dark panel: shadow, a smoky gradient with a faint grain, a gold line set in from the edge and ornaments at
+	// its corners (a_ornate: also a jewel top and bottom); a_alpha fades it all
+	void  Panel(ImDrawList* a_dl, ImVec2 a_a, ImVec2 a_b, float a_alpha = 1.0f, bool a_ornate = true);
+	// Only the gold: a frame of two lines with corner brackets and jewels, around something already drawn
+	void  Frame(ImDrawList* a_dl, ImVec2 a_a, ImVec2 a_b, float a_alpha = 1.0f);
 	void  Sheet(ImDrawList* a_dl, ImVec2 a_pos, ImVec2 a_size, int a_art, float a_dim = 1.0f);  // a parchment page with its shadow
 	void  Vignette(ImDrawList* a_dl, float a_w, float a_h);
 	void  Cursor(ImU32 a_fill = IM_COL32(241, 238, 232, 245));

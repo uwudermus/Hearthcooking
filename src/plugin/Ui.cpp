@@ -299,20 +299,83 @@ namespace Ui
 		}
 	}
 
-	void MsgBox(ImDrawList* dl, ImVec2 a, ImVec2 b)
+	void MsgBox(ImDrawList* dl, ImVec2 a, ImVec2 b) { Panel(dl, a, b, 1.0f, true); }
+
+	namespace
 	{
-		Shadow(dl, a, b, S(30), 0.7f);
-		dl->AddRectFilledMultiColor(a, b, IM_COL32(0, 0, 0, 219), IM_COL32(0, 0, 0, 219), IM_COL32(0, 0, 0, 199), IM_COL32(0, 0, 0, 199));
-		dl->AddLine(a, ImVec2(b.x, a.y), Alpha(kWhite, 0.62f));
-		dl->AddLine(ImVec2(a.x, b.y), b, Alpha(kWhite, 0.62f));
-		const ImU32 br = Alpha(kWhite, 0.45f);
-		const float i = S(6), bw = S(10);
-		dl->AddLine(ImVec2(a.x + i + bw, a.y + i), ImVec2(a.x + i, a.y + i), br);
-		dl->AddLine(ImVec2(a.x + i, a.y + i), ImVec2(a.x + i, b.y - i), br);
-		dl->AddLine(ImVec2(a.x + i, b.y - i), ImVec2(a.x + i + bw, b.y - i), br);
-		dl->AddLine(ImVec2(b.x - i - bw, a.y + i), ImVec2(b.x - i, a.y + i), br);
-		dl->AddLine(ImVec2(b.x - i, a.y + i), ImVec2(b.x - i, b.y - i), br);
-		dl->AddLine(ImVec2(b.x - i, b.y - i), ImVec2(b.x - i - bw, b.y - i), br);
+		// a corner bracket: an L in gold with a jewel at its elbow; sx, sy point it inward
+		void Corner(ImDrawList* dl, ImVec2 c, float sx, float sy, float len, float a)
+		{
+			const ImU32 g = Alpha(kTrim, a), hi = Alpha(kTrimBright, a), dk = Alpha(IM_COL32(0, 0, 0, 255), 0.6f * a);
+			const float t = S(2.0f);
+			// a dark line under it so it reads on anything
+			dl->AddLine(ImVec2(c.x + sx * S(1), c.y + sy * S(1)), ImVec2(c.x + sx * len, c.y + sy * S(1)), dk, t + S(1.5f));
+			dl->AddLine(ImVec2(c.x + sx * S(1), c.y + sy * S(1)), ImVec2(c.x + sx * S(1), c.y + sy * len), dk, t + S(1.5f));
+			dl->AddLine(c, ImVec2(c.x + sx * len, c.y), g, t);
+			dl->AddLine(c, ImVec2(c.x, c.y + sy * len), g, t);
+			// a second, shorter bracket inside it
+			const float in = S(5);
+			dl->AddLine(ImVec2(c.x + sx * in, c.y + sy * in), ImVec2(c.x + sx * len * 0.55f, c.y + sy * in), Alpha(kTrimDark, a), S(1.2f));
+			dl->AddLine(ImVec2(c.x + sx * in, c.y + sy * in), ImVec2(c.x + sx * in, c.y + sy * len * 0.55f), Alpha(kTrimDark, a), S(1.2f));
+			// the jewel at the elbow, and a tick at each arm's end
+			Diamond(dl, c, S(4.5f), Alpha(IM_COL32(60, 16, 12, 255), a), hi);
+			Diamond(dl, ImVec2(c.x + sx * len, c.y), S(2.2f), g, 0);
+			Diamond(dl, ImVec2(c.x, c.y + sy * len), S(2.2f), g, 0);
+		}
+
+		// a jewel on a rule: the ornament at the middle of a panel's top or bottom edge
+		void Crest(ImDrawList* dl, float cx, float y, float w, float a)
+		{
+			FadeRule(dl, cx - w, cx + w, y, 0.9f * a, kTrim);
+			Diamond(dl, ImVec2(cx - S(14), y + 0.5f), S(2.5f), Alpha(kTrim, a), 0);
+			Diamond(dl, ImVec2(cx + S(14), y + 0.5f), S(2.5f), Alpha(kTrim, a), 0);
+			Diamond(dl, ImVec2(cx, y + 0.5f), S(7), Alpha(IM_COL32(24, 20, 16, 255), a), Alpha(kTrimBright, a));
+			Diamond(dl, ImVec2(cx, y + 0.5f), S(3), Alpha(IM_COL32(150, 36, 24, 255), a), 0);
+		}
+	}
+
+	void Frame(ImDrawList* dl, ImVec2 a, ImVec2 b, float al)
+	{
+		const float in = S(4);
+		dl->AddRect(a, b, Alpha(IM_COL32(0, 0, 0, 255), 0.55f * al), S(2), 0, S(2.5f));
+		dl->AddRect(ImVec2(a.x + in, a.y + in), ImVec2(b.x - in, b.y - in), Alpha(kTrim, 0.8f * al), 0.0f, 0, S(1.2f));
+		dl->AddRect(ImVec2(a.x + in + S(3), a.y + in + S(3)), ImVec2(b.x - in - S(3), b.y - in - S(3)), Alpha(kTrimDark, 0.6f * al), 0.0f, 0, S(1.0f));
+		const float len = (std::min)(S(26), (std::min)(b.x - a.x, b.y - a.y) * 0.3f);
+		Corner(dl, ImVec2(a.x + in, a.y + in), 1, 1, len, al);
+		Corner(dl, ImVec2(b.x - in, a.y + in), -1, 1, len, al);
+		Corner(dl, ImVec2(a.x + in, b.y - in), 1, -1, len, al);
+		Corner(dl, ImVec2(b.x - in, b.y - in), -1, -1, len, al);
+	}
+
+	void Panel(ImDrawList* dl, ImVec2 a, ImVec2 b, float al, bool ornate)
+	{
+		Shadow(dl, a, b, S(ornate ? 26 : 14), 0.65f * al);
+		// smoke: warm black, lighter at the top, with a faint grain of lines
+		dl->AddRectFilledMultiColor(a, b, Alpha(IM_COL32(34, 29, 24, 255), 0.94f * al), Alpha(IM_COL32(34, 29, 24, 255), 0.94f * al),
+			Alpha(IM_COL32(12, 10, 9, 255), 0.94f * al), Alpha(IM_COL32(12, 10, 9, 255), 0.94f * al));
+		for (float y = a.y + S(3); y < b.y - S(2); y += S(3)) {
+			dl->AddLine(ImVec2(a.x + S(2), y), ImVec2(b.x - S(2), y), Alpha(IM_COL32(255, 230, 190, 255), 0.018f * al));
+		}
+		// light falling in from the top edge
+		dl->AddRectFilledMultiColor(a, ImVec2(b.x, a.y + (b.y - a.y) * 0.35f), Alpha(IM_COL32(120, 96, 60, 255), 0.12f * al), Alpha(IM_COL32(120, 96, 60, 255), 0.12f * al),
+			Alpha(IM_COL32(120, 96, 60, 255), 0.0f), Alpha(IM_COL32(120, 96, 60, 255), 0.0f));
+		if (!ornate) {
+			// small: a single gold line and corner ticks
+			dl->AddRect(a, b, Alpha(IM_COL32(0, 0, 0, 255), 0.6f * al), S(3), 0, S(1.5f));
+			dl->AddRect(ImVec2(a.x + S(2), a.y + S(2)), ImVec2(b.x - S(2), b.y - S(2)), Alpha(kTrim, 0.55f * al), S(2), 0, S(1.0f));
+			const float t = S(7);
+			for (int k = 0; k < 4; ++k) {
+				const ImVec2 c(k & 1 ? b.x - S(2) : a.x + S(2), k & 2 ? b.y - S(2) : a.y + S(2));
+				const float  sx = k & 1 ? -1.0f : 1.0f, sy = k & 2 ? -1.0f : 1.0f;
+				dl->AddLine(c, ImVec2(c.x + sx * t, c.y), Alpha(kTrimBright, al), S(2));
+				dl->AddLine(c, ImVec2(c.x, c.y + sy * t), Alpha(kTrimBright, al), S(2));
+			}
+			return;
+		}
+		Frame(dl, a, b, al);
+		const float cx = (a.x + b.x) * 0.5f, w = (std::min)(S(120), (b.x - a.x) * 0.3f);
+		Crest(dl, cx, a.y + S(4), w, al);
+		Crest(dl, cx, b.y - S(4), w, al);
 	}
 
 	void Sheet(ImDrawList* dl, ImVec2 pos, ImVec2 size, int a_art, float a_dim)
@@ -347,11 +410,11 @@ namespace Ui
 
 	void Vignette(ImDrawList* a_dl, float W, float H)
 	{
-		const ImU32 b = IM_COL32(0, 0, 0, 255), t = IM_COL32(0, 0, 0, 0);
-		a_dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(W, H * 0.13f), Alpha(b, 0.45f), Alpha(b, 0.45f), t, t);
-		a_dl->AddRectFilledMultiColor(ImVec2(0, H * 0.84f), ImVec2(W, H), t, t, Alpha(b, 0.55f), Alpha(b, 0.55f));
-		a_dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(W * 0.12f, H), Alpha(b, 0.35f), t, t, Alpha(b, 0.35f));
-		a_dl->AddRectFilledMultiColor(ImVec2(W * 0.88f, 0), ImVec2(W, H), t, Alpha(b, 0.35f), Alpha(b, 0.35f), t);
+		const ImU32 b = IM_COL32(10, 6, 3, 255), t = IM_COL32(10, 6, 3, 0);
+		a_dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(W, H * 0.16f), Alpha(b, 0.6f), Alpha(b, 0.6f), t, t);
+		a_dl->AddRectFilledMultiColor(ImVec2(0, H * 0.8f), ImVec2(W, H), t, t, Alpha(b, 0.7f), Alpha(b, 0.7f));
+		a_dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(W * 0.16f, H), Alpha(b, 0.5f), t, t, Alpha(b, 0.5f));
+		a_dl->AddRectFilledMultiColor(ImVec2(W * 0.84f, 0), ImVec2(W, H), t, Alpha(b, 0.5f), Alpha(b, 0.5f), t);
 	}
 
 	void Cursor(ImU32 a_fill)
@@ -417,12 +480,22 @@ namespace Ui
 		const float h = F.menu->FontSize + S(12);
 		bool        hov = false;
 		const bool  r = Clicked(a_id, ImVec2(a_cx - w * 0.5f, a_y), ImVec2(a_cx + w * 0.5f, a_y + h), &hov, a_enabled);
-		const ImU32 col = !a_enabled ? kDim : hov ? (a_danger ? IM_COL32(244, 185, 169, 255) : IM_COL32(255, 255, 255, 255)) : kGrey;
+		const ImU32 col = !a_enabled ? kDim : hov ? (a_danger ? IM_COL32(244, 185, 169, 255) : kTrimBright) : IM_COL32(214, 196, 160, 255);
+		// a dark plate, gold-edged, with a jewel at each end; lit from within when the pointer is on it
+		const ImVec2 pa(a_cx - w * 0.5f, a_y), pb(a_cx + w * 0.5f, a_y + h);
+		dl->AddRectFilledMultiColor(pa, pb, IM_COL32(36, 30, 24, 230), IM_COL32(36, 30, 24, 230), IM_COL32(14, 12, 10, 235), IM_COL32(14, 12, 10, 235));
+		if (hov && a_enabled) {
+			const ImU32 gl = a_danger ? IM_COL32(208, 106, 82, 255) : kTrim;
+			dl->AddRectFilledMultiColor(pa, ImVec2(pb.x, a_y + h * 0.5f), Alpha(gl, 0.0f), Alpha(gl, 0.0f), Alpha(gl, 0.16f), Alpha(gl, 0.16f));
+			dl->AddRectFilledMultiColor(ImVec2(pa.x, a_y + h * 0.5f), pb, Alpha(gl, 0.16f), Alpha(gl, 0.16f), Alpha(gl, 0.0f), Alpha(gl, 0.0f));
+		}
+		const ImU32 edge = !a_enabled ? kTrimDark : hov ? kTrimBright : kTrim;
+		dl->AddRect(pa, pb, IM_COL32(0, 0, 0, 200), S(2), 0, S(2.5f));
+		dl->AddRect(ImVec2(pa.x + S(2), pa.y + S(2)), ImVec2(pb.x - S(2), pb.y - S(2)), Alpha(edge, hov ? 1.0f : 0.7f), S(1), 0, S(1.2f));
+		Diamond(dl, ImVec2(pa.x + S(2), a_y + h * 0.5f), S(hov ? 6.0f : 4.5f), IM_COL32(24, 20, 16, 255), edge);
+		Diamond(dl, ImVec2(pb.x - S(2), a_y + h * 0.5f), S(hov ? 6.0f : 4.5f), IM_COL32(24, 20, 16, 255), edge);
 		if (hov) {
-			Glow(dl, F.menu, ImVec2(a_cx - (w - S(52)) * 0.5f, a_y + S(6)), Alpha(a_danger ? IM_COL32(208, 106, 82, 255) : kWhite, 0.06f), text, 0.24f, S(3));
-			const ImU32 lc = a_danger ? IM_COL32(208, 106, 82, 255) : kWhite;
-			dl->AddRectFilled(ImVec2(a_cx - w * 0.5f, a_y + h * 0.5f), ImVec2(a_cx - w * 0.5f + S(12), a_y + h * 0.5f + 1), lc);
-			dl->AddRectFilled(ImVec2(a_cx + w * 0.5f - S(12), a_y + h * 0.5f), ImVec2(a_cx + w * 0.5f, a_y + h * 0.5f + 1), lc);
+			Glow(dl, F.menu, ImVec2(a_cx - (w - S(52)) * 0.5f, a_y + S(6)), Alpha(a_danger ? IM_COL32(208, 106, 82, 255) : kTrimBright, 0.07f), text, 0.24f, S(3));
 		}
 		TextC(dl, F.menu, a_cx + S(2), a_y + S(6), col, text, 0.24f, 0.6f);
 		return r;
