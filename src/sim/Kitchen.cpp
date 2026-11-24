@@ -797,7 +797,7 @@ namespace hc
 		}
 		_rhythm += q;
 		++_strokes;
-		_knead += 0.17 * m::Clamp(a_length / 5.0, 0.3, 1.2);  // about a dozen good pushes
+		_knead += 0.17 * m::Clamp(a_length / 5.0, 0.3, 1.2) / _kneadScale;  // about a dozen good pushes (more for a bigger dough)
 		_last = a_now;
 	}
 

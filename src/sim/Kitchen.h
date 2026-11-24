@@ -315,6 +315,7 @@ namespace hc
 		// The dough: a stroke of the heel of the hand, this long (units), this many seconds after the last
 		void   Knead(double a_length, double a_now);
 		double Dough() const { return _knead; }
+		void   SetKneadScale(double a_s) { _kneadScale = a_s > 0.1 ? a_s : 1.0; }  // our version: a bigger dough takes more working
 		double Rhythm() const { return _strokes ? _rhythm / _strokes : 0.0; }
 		int    Strokes() const { return _strokes; }
 
@@ -345,7 +346,7 @@ namespace hc
 
 	private:
 		bool    _pie, _dough;
-		double  _knead = 0.0, _rhythm = 0.0, _last = -100.0;
+		double  _knead = 0.0, _rhythm = 0.0, _last = -100.0, _kneadScale = 1.0;
 		int     _strokes = 0;
 		bool    _sector[kSectors * 2]{};  // two rings
 		bool    _crimp[kCrimps]{};
