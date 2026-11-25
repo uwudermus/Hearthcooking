@@ -427,6 +427,7 @@ namespace Cook
 			double size = 1.0;    // its share of the dough
 		};
 		std::vector<TrayPiece> g_tray;
+		double                 g_flyAt = -100.0;  // when the cut pieces set off from the board for the tray
 		std::vector<std::pair<hc::Tier, bool>> g_portionTiers;  // each portion as it came off the fire (tier, raw)
 
 		RE::TESBoundObject* Firewood() { return RE::TESForm::LookupByID<RE::TESBoundObject>(0x0006F993); }  // Skyrim.esm Firewood01
@@ -522,6 +523,8 @@ namespace Cook
 				g_tray[i].size = c[i + 1] - c[i];
 				g_tray[i].st = i == 0 ? TraySt::Current : TraySt::Waiting;
 			}
+			g_flyAt = g_clock;
+			Audio::Take("knead_", 0.6f);
 			Toast(fmt::format("Pieces: {}  (the rest wait on the tray)", sizes));
 			spdlog::info("Dough cut in {}: {}", n, sizes);
 		}
@@ -3086,12 +3089,14 @@ namespace Cook
 				Scene::Remove(id);
 			}
 			P.fill.clear();
-			// what was set on the last piece went with it
+			// the filling is cut once for the whole batch: what went on the last piece is back in its bowl for the next
 			for (int b = 0; b < g_chunks.Count() && b < static_cast<int>(g_pieces.size()); ++b) {
 				if (g_pieces[b].onDough) {
-					g_chunks.At(b).state = hc::Chunks::State::None;
-					Scene::Hide(g_pieces[b].prop, true);
-					Scene::Hide(g_pieces[b].core, true);
+					g_pieces[b].onDough = false;
+					auto& body = g_chunks.At(b);
+					body.state = hc::Chunks::State::Pot;
+					body.p = kFillAt + Vec3{ 0.0, 0.0, 1.5 };
+					body.v = {};
 				}
 			}
 			// a whole filling (honey, berries, cheese) is shared: back on the cloth for the next
@@ -5467,7 +5472,17 @@ namespace Cook
 					const bool  held = g_hold == Hold::TrayItem && g_holdUnit == i;
 					const bool  shown = t.st == TraySt::Waiting || t.st == TraySt::OnTray;
 					const bool  asDish = t.st == TraySt::OnTray && t.made;
-					const Vec3  spot = held ? g_carry : TraySpot(i);
+					Vec3        spot = held ? g_carry : TraySpot(i);
+					if (t.st == TraySt::Waiting && g_batchCut && i > 0) {
+						// just cut: each piece hops from the board to the tray, one after another
+						const double ft = (g_clock - g_flyAt - 0.3 * (i - 1)) / 0.7;
+						if (ft < 1.0) {
+							const double e = Clamp(ft, 0.0, 1.0), sm = e * e * (3.0 - 2.0 * e);
+							const Vec3   from = g_doughAt + Vec3{ (i - (n - 1) * 0.5) * 1.5, 0.0, 1.0 };
+							spot = from + (TraySpot(i) - from) * sm;
+							spot.z += std::sin(e * kPi) * 6.0;
+						}
+					}
 					const double br = i < static_cast<int>(g_batch.size()) ? TimerLookOf(g_batch[i], 0.85, 1.2, 1.6) : 0.0;
 					const double f = std::cbrt((std::max)(0.15, t.size * n));
 					if (rawId >= 0) {
