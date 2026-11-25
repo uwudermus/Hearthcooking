@@ -2214,7 +2214,7 @@ namespace Cook
 				const double share = c >= 0 ? g_tray[c].size * ServeCount() : 1.0;  // a piece: by its share of the dough
 				return 3.0 * std::cbrt((std::max)(0.2, share)) * 0.9;
 			}
-			return 3.0 * std::cbrt(grow) * (FlourRecipe() && ServeCount() > 1 ? std::cbrt(static_cast<double>(Reps(Role::Dough))) * 0.9 : 1.0);
+			return 3.0 * std::cbrt(grow) * (FlourRecipe() && ServeCount() > 1 ? std::cbrt(static_cast<double>(ServeCount())) * 0.85 : 1.0);
 		}
 
 		bool AnyOnBoard()
@@ -2947,9 +2947,12 @@ namespace Cook
 				break;
 			case Hold::Dough:
 				if (OnPlane(mx, my, kBoardTop + 1.0, x, y)) {
-					// kneading stays on the board: the dough never leaves it (the peel carries it to the oven)
-					x = Clamp(x, L::kBoardX - L::kBoardW * 0.5 + 3.0, L::kBoardX + L::kBoardW * 0.5 - 3.0);
-					y = Clamp(y, L::kBoardY - L::kBoardD * 0.5 + 3.0, L::kBoardY + L::kBoardD * 0.5 - 3.0);
+					// kneading stays on the board: the dough never leaves it (our version: a piece being made up can be
+					// carried off it, to the baking tray)
+					if (!(TrayFlow() && CurrentPiece() >= 0 && !NeedCut())) {
+						x = Clamp(x, L::kBoardX - L::kBoardW * 0.5 + 3.0, L::kBoardX + L::kBoardW * 0.5 - 3.0);
+						y = Clamp(y, L::kBoardY - L::kBoardD * 0.5 + 3.0, L::kBoardY + L::kBoardD * 0.5 - 3.0);
+					}
 					// a push: from where it was taken to where it's let go
 					const double dx = x - g_grabX, dy = y - g_grabY;
 					g_strokeLen = std::hypot(dx, dy);
@@ -3101,7 +3104,7 @@ namespace Cook
 			}
 			// a whole filling (honey, berries, cheese) is shared: back on the cloth for the next
 			for (auto& u : g_units) {
-				if (u.role == Role::Filling && u.at == Unit::At::Dough && !u.dice && u.cut.cutCount == 0) {
+				if (g_oven && g_oven->Pie() && u.role == Role::Filling && u.at == Unit::At::Dough && !u.dice && u.cut.cutCount == 0) {
 					u.at = Unit::At::Cloth;
 				}
 			}
@@ -3160,7 +3163,8 @@ namespace Cook
 				if ((t.st != TraySt::Waiting && t.st != TraySt::OnTray) || !NearScreen(TraySpot(i) + Vec3{ 0, 0, 0.8 }, a_mx, a_my, (std::max)(1.4, TraySpacing() * 0.45), 22.0f)) {
 					continue;
 				}
-				if (g_oven->Out()) {
+				const bool unbaked = i < static_cast<int>(g_batch.size()) && g_batch[i].cooked <= 0.0;
+				if (g_oven->Out() && !(t.st == TraySt::Waiting && unbaked && CurrentPiece() < 0)) {
 					g_hold = Hold::TrayItem;  // baked: to its plate
 					g_holdUnit = i;
 					return true;
@@ -3703,7 +3707,9 @@ namespace Cook
 						g_squash = 0;
 						break;
 					}
-					if (TrayFlow() && NearScreen(MouthAt(), mx, my, 6.0, 50.0f)) {
+					if (TrayFlow() && OverTray(mx, my) && NeedCut()) {
+						Toast(fmt::format("Cut the dough into {} with the knife first", ServeCount()));
+					} else if (TrayFlow() && NearScreen(MouthAt(), mx, my, 6.0, 50.0f)) {
 						Toast("Onto the baking tray first; the tray goes in the oven");
 					} else if (NearScreen(MouthAt(), mx, my, 6.0, 50.0f)) {
 						Toast("Use the peel: drag it under the dough, then into the oven");
@@ -6093,6 +6099,9 @@ namespace Cook
 			case Hold::Meat:
 				return "Onto the plate to serve, or back on the spit";
 			case Hold::Dough:
+				if (TrayFlow() && DoughReady() && CurrentPiece() >= 0) {
+					return "Onto the baking tray";
+				}
 				return g_oven && g_oven->Pie() && g_oven->Dough() >= 0.9 ? "Roll it out with the rolling pin" : "A long push to knead";
 			case Hold::Roll:
 				return Dumpling() ? "Hold and roll it about over the dough, out square" : "Hold and roll it about over the dough, out round";
