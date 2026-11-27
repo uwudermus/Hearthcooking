@@ -645,6 +645,7 @@ namespace Cook
 			FinishNo
 		};
 		bool board_kneading();
+		int  UnitsWanted();
 		void NextKnife();
 		Scene::Id AddResult();
 		// some bakes a touch bigger than the rest (a braided bread is long and thin, and read small; a plain loaf too)
@@ -930,6 +931,13 @@ namespace Cook
 			Put(P.room, {});
 			P.cloth = Add("Cloth");
 			Put(P.cloth, { kClothShift, 0.0, 0.0 });
+			if (g_recipe && UnitsWanted() > 8) {
+				// our version: many things to lay out: the linen longer toward you (to the table's front edge) and a
+				// little wider (up to the board); it's made over x -36..-22, y -18..18
+				const double sx = 15.0 / 14.0, sy = 38.0 / 36.0;
+				Scene::Place(P.cloth, { -32.0 + 36.0 * sx, -20.0 + 18.0 * sy, 0.0 }, {}, 1.0f);
+				Scene::Stretch(P.cloth, static_cast<float>(sx), static_cast<float>(sy), 1.0f);
+			}
 			for (int k = 0; k < 3; ++k) {
 				P.pile[k] = KitAdd(Kit::Role::Log);
 			}
@@ -1418,8 +1426,8 @@ namespace Cook
 					// (with many, closer together: five down a column and narrower columns)
 					const int  total = UnitsWanted();
 					const bool many = total > 8;
-					const int  rows = many ? 5 : 4;
-					u.clothAt = { -31.5 + (many ? 3.9 : 5.0) * (k / rows) + kClothShift, 5.5 - (k % rows) * (many ? 5.0 : 6.5), 0.0 };  // clear of the recipe card
+					const int  rows = many ? 7 : 4;  // (many: down the longer linen, seven to a column)
+					u.clothAt = { -31.5 + (many ? 3.6 : 5.0) * (k / rows) + kClothShift, (many ? 6.0 : 5.5) - (k % rows) * (many ? 4.0 : 6.5), 0.0 };  // clear of the recipe card
 					g_units.push_back(std::move(u));
 				}
 				ArrangeCloth();
