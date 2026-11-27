@@ -1,0 +1,31 @@
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(202,14-31): warning X3556: integer modulus may be much slower, try using uints if possible.
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(202,39-51): warning X3556: integer modulus may be much slower, try using uints if possible.
+
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(202,14-31): warning X3556: integer modulus may be much slower, try using uints if possible.
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(202,39-51): warning X3556: integer modulus may be much slower, try using uints if possible.
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(288,2): warning X4000: use of potentially uninitialized variable (Shade)
+
+compilation object save succeeded; see \\.\NUL
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(202,14-31): warning X3556: integer modulus may be much slower, try using uints if possible.
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(202,39-51): warning X3556: integer modulus may be much slower, try using uints if possible.
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(456,3): warning X4000: use of potentially uninitialized variable (CapPoint)
+
+compilation object save succeeded; see \\.\NUL
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(456,3): warning X4000: use of potentially uninitialized variable (CapPoint)
+
+compilation object save succeeded; see \\.\NUL
+D:\a\Hearthcooking\Hearthcooking\shader.hlsl(456,3): warning X4000: use of potentially uninitialized variable (CapPoint)
+
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
+compilation object save succeeded; see \\.\NUL
